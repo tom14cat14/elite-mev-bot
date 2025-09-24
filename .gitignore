@@ -1,7 +1,12 @@
-# Rust
+# Rust build artifacts
 /target/
 **/*.rs.bk
 *.pdb
+
+# Compiled binaries
+/target/debug/
+/target/release/
+*.exe
 
 # Cargo
 Cargo.lock
