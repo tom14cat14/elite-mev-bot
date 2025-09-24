@@ -1,0 +1,45 @@
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+
+# Cargo
+Cargo.lock
+
+# Environment variables
+.env
+!.env.example
+!.env.template
+!.env.elite_example
+!.env.mev_example
+!.env.microcap
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Keys and secrets
+*key*
+*secret*
+*.pem
+*.p12
+
+# Temporary files
+*.tmp
+*.temp
+nohup.out
+
+# Build artifacts
+*.so
+*.dylib
+*.dll

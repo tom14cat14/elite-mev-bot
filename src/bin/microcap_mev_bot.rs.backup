@@ -1,0 +1,151 @@
+use anyhow::Result;
+use shared_bot_infrastructure::*;
+use tracing::{info, error};
+use tokio::signal;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    // Initialize logging
+    tracing_subscriber::fmt::init();
+
+    info!("💎 Starting MICRO-CAP MEV Bot (4 SOL Strategy)");
+    info!("🎯 Target: Pre-migration coins <1M market cap");
+    info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
+    // Load configuration from environment
+    let config = match SharedConfig::from_env() {
+        Ok(config) => config,
+        Err(e) => {
+            error!("❌ Failed to load configuration: {}", e);
+            return Err(e);
+        }
+    };
+
+    info!("✅ Configuration loaded:");
+    info!("  • ShredStream: {}", config.shreds_endpoint);
+    info!("  • Jupiter API: {}***", &config.jupiter_api_key[..8]);
+
+    // MICRO-CAP MEV Configuration - Optimized for 4 SOL high-impact strategy targeting pre-migration coins <100K
+    let mev_config = MonitorConfig {
+        enable_sandwich_attacks: true,   // PRIMARY: Target pre-migration volatility
+        enable_arbitrage: false,         // DISABLED: Need capital concentration
+        enable_liquidations: false,      // DISABLED: Focus on micro-cap moves
+        enable_microcap_filter: true,    // ENABLED: Pre-migration filter
+        max_market_cap_usd: Some(100_000.0), // Max 100K market cap for pre-migration focus
+        max_concurrent_opportunities: 3, // Lower concurrency, higher impact per trade
+        opportunity_timeout_ms: 800,     // Ultra-fast execution for micro-caps
+        stats_reporting_interval_ms: 15000, // 15 second reports for faster feedback
+    };
+
+    info!("💎 MICRO-CAP MEV Configuration:");
+    info!("  • Capital: 4.0 SOL (concentrated strategy)");
+    info!("  • Target: <100K market cap tokens (PRE-MIGRATION FOCUS)");
+    info!("  • Focus: Pre-migration high volatility");
+    info!("  • Position size: 0.8-1.5 SOL per opportunity");
+    info!("  • Expected impact: 5-20% price moves");
+    info!("  • Min liquidity: 1.0 SOL (aggressive)");
+    info!("  • Timeout: {}ms (ultra-fast)", mev_config.opportunity_timeout_ms);
+
+    // Create specialized micro-cap MEV monitor
+    info!("🚀 Initializing micro-cap MEV infrastructure...");
+    let mut mev_monitor = match MempoolMonitor::new(
+        config.shreds_endpoint,
+        config.jupiter_api_key,
+        "https://mainnet.jito.wtf".to_string(), // Production Jito endpoint
+        mev_config,
+    ).await {
+        Ok(monitor) => {
+            info!("✅ Micro-cap MEV monitor initialized successfully");
+            monitor
+        }
+        Err(e) => {
+            error!("❌ Failed to initialize micro-cap MEV monitor: {}", e);
+            return Err(e);
+        }
+    };
+
+    // Display initial statistics
+    let stats = mev_monitor.get_stats();
+    info!("📊 Initial Micro-Cap MEV Status:");
+    info!("  • Transactions processed: {}", stats.transactions_processed);
+    info!("  • Opportunities detected: {}", stats.opportunities_detected);
+    info!("  • Total profit: {:.4} SOL", stats.total_profit_sol);
+
+    // Set up graceful shutdown handler
+    let shutdown_handle = tokio::spawn(async {
+        match signal::ctrl_c().await {
+            Ok(()) => {
+                info!("🛑 Shutdown signal received");
+            }
+            Err(err) => {
+                error!("❌ Failed to listen for shutdown signal: {}", err);
+            }
+        }
+    });
+
+    info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    info!("💎 MICRO-CAP MEV Bot is now LIVE!");
+    info!("🎯 Hunting pre-migration coins with 4 SOL impact strategy");
+    info!("💡 Press Ctrl+C to stop");
+    info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
+    // Start monitoring (this runs until shutdown)
+    tokio::select! {
+        result = mev_monitor.start_monitoring() => {
+            match result {
+                Ok(()) => info!("✅ Micro-cap MEV monitoring completed successfully"),
+                Err(e) => {
+                    error!("❌ Micro-cap MEV monitoring failed: {}", e);
+                    return Err(e);
+                }
+            }
+        }
+        _ = shutdown_handle => {
+            info!("🛑 Graceful shutdown initiated");
+        }
+    }
+
+    // Final statistics before shutdown
+    let final_stats = mev_monitor.get_stats();
+    info!("📊 Final Micro-Cap MEV Statistics:");
+    info!("  • Runtime: {} seconds", final_stats.uptime_seconds);
+    info!("  • Transactions processed: {}", final_stats.transactions_processed);
+    info!("  • Opportunities detected: {}", final_stats.opportunities_detected);
+    info!("  • Opportunities executed: {}", final_stats.opportunities_executed);
+    info!("  • Total profit: {:.4} SOL", final_stats.total_profit_sol);
+    info!("  • Average processing time: {:.2}ms", final_stats.average_processing_time_ms);
+
+    let success_rate = if final_stats.opportunities_detected > 0 {
+        (final_stats.opportunities_executed as f64 / final_stats.opportunities_detected as f64) * 100.0
+    } else {
+        0.0
+    };
+    info!("  • Success rate: {:.1}%", success_rate);
+
+    // Calculate profit percentage on 4 SOL
+    let profit_percentage = (final_stats.total_profit_sol / 4.0) * 100.0;
+    info!("  • Profit on 4 SOL: {:.2}%", profit_percentage);
+
+    // Generate final performance report
+    if let Ok(report) = mev_monitor.generate_performance_report(24).await {
+        info!("📋 24-Hour Micro-Cap Performance Report:");
+        info!("  • Total opportunities: {}", report.total_opportunities);
+        info!("  • Total executions: {}", report.total_executions);
+        info!("  • Total profit: {:.4} SOL", report.total_profit_sol);
+        info!("  • ROI on 4 SOL: {:.1}%", (report.total_profit_sol / 4.0) * 100.0);
+        info!("  • Average execution time: {:.1}ms", report.average_execution_time_ms);
+        info!("  • Success rate: {:.1}%", report.success_rate_percent);
+
+        // Show profit breakdown by engine
+        for (engine, profit) in &report.profit_by_engine {
+            if *profit > 0.0 {
+                info!("  • {} profit: {:.4} SOL ({:.1}% ROI)", engine, profit, (profit / 4.0) * 100.0);
+            }
+        }
+    }
+
+    info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    info!("👋 Micro-Cap MEV Bot shutdown complete");
+
+    Ok(())
+}

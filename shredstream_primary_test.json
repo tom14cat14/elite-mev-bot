@@ -1,0 +1,24 @@
+{
+  "test_timestamp": "2025-09-22T18:24:54.353178",
+  "architecture": "ShredStream UDP Primary + gRPC Backup",
+  "results": {
+    "connection_test": {
+      "status": "SUCCESS",
+      "connection_time_ms": 48.1,
+      "endpoint": "stream.shredstream.com:8765"
+    },
+    "latency_test": {
+      "average_latency_ms": 1.76,
+      "target_latency_ms": 2.0,
+      "performance": "EXCELLENT",
+      "status": "PASS"
+    },
+    "failover_test": {
+      "primary_available": true,
+      "backup_grpc_available": true,
+      "backup_latency_ms": 27.35,
+      "failover_logic": "CONFIGURED",
+      "status": "READY"
+    }
+  }
+}

@@ -1,0 +1,70 @@
+[package]
+name = "elite-mev-production-fixed"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "elite_mev_production_fixed"
+path = "src/bin/elite_mev_bot_v2_1_production.rs"
+
+[dependencies]
+# Core async runtime
+tokio = { version = "1.21", features = ["rt-multi-thread", "macros", "time", "sync", "net"] }
+anyhow = "1.0"
+futures = "0.3"
+
+# Solana dependencies (older versions to avoid extraction issues)
+solana-sdk = "1.16"
+solana-rpc-client = "1.16"
+solana-entry = "1.16"
+bs58 = "0.4"
+hex = "0.4"
+
+# SPL Token support
+spl-token = "3.5"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+bincode = "1.3"
+
+# High-performance JSON (try older version)
+simd-json = "0.10"
+
+# WebSocket
+tokio-tungstenite = "0.18"
+futures-util = "0.3"
+
+# HTTP client
+reqwest = { version = "0.11", features = ["json"] }
+
+# Time handling
+chrono = "0.4"
+
+# Security
+aes-gcm = "0.9"
+pbkdf2 = "0.11"
+sha2 = "0.10"
+
+# Rate limiting
+governor = "0.5"
+nonzero_ext = "0.3"
+
+# UUID and randomness
+uuid = { version = "1.0", features = ["v4"] }
+fastrand = "1.9"
+
+# Async trait
+async-trait = "0.1"
+
+# Synchronization
+parking_lot = "0.12"
+
+# Environment
+dotenvy = "0.15"
+
+# ShredStream (try to use if available)
+# solana-stream-sdk = "0.4"
+
+# NO LOGGING PACKAGES - use macros only
+# Avoid: tracing, tracing-subscriber, env_logger, log

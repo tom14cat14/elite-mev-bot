@@ -1,0 +1,117 @@
+[package]
+name = "shared-bot-infrastructure"
+version = "0.1.0"
+description = "Shared infrastructure for MEV and Arbitrage bots"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "shreds-rs-temp-release"
+path = "src/main.rs"
+
+[[bin]]
+name = "latency_test"
+path = "src/bin/latency_test.rs"
+
+[[bin]]
+name = "real_latency_test"
+path = "src/bin/real_latency_test.rs"
+
+[[bin]]
+name = "mev_bot"
+path = "src/bin/mev_bot.rs"
+
+[[bin]]
+name = "unified_mev_bot"
+path = "src/bin/unified_mev_bot.rs"
+
+[[bin]]
+name = "premigration_mev_bot"
+path = "src/bin/premigration_mev_bot.rs"
+
+[[bin]]
+name = "elite_mev_bot"
+path = "src/bin/elite_mev_bot.rs"
+
+[[bin]]
+name = "elite_latency_test"
+path = "src/bin/elite_latency_test.rs"
+
+[[bin]]
+name = "elite_mev_bot_v2"
+path = "src/bin/elite_mev_bot_v2.rs"
+
+[[bin]]
+name = "groks_comprehensive_test"
+path = "src/bin/groks_comprehensive_test.rs"
+
+[[bin]]
+name = "verify_shredstream_optimization"
+path = "src/bin/verify_shredstream_optimization.rs"
+
+[[bin]]
+name = "simd_filtering_test"
+path = "src/bin/simd_filtering_test.rs"
+
+[[bin]]
+name = "elite_mev_bot_v2_1_production"
+path = "src/bin/elite_mev_bot_v2_1_production.rs"
+
+[[bin]]
+name = "config_cli"
+path = "src/config_cli.rs"
+
+[[bin]]
+name = "test_runner"
+path = "src/bin/test_runner.rs"
+
+[dependencies]
+# ShredStream dependencies - SIMD optimized
+bincode = "1.3.3"
+simd-json = "0.13"
+chrono = "0.4.26"
+dotenvy = "0.15"
+futures = "0.3.24"
+solana-stream-sdk = "0.5.1"
+solana-entry = "=2.2.1"
+solana-rpc-client = "=2.2.1"
+solana-sdk = "=2.2.1"
+bs58 = "0.5"
+hex = "0.4"
+tokio = { version = "1.21.2", features = ["rt-multi-thread", "macros", "time", "sync"] }
+
+# Additional dependencies for shared bot infrastructure
+reqwest = { version = "0.11", features = ["json"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+anyhow = "1.0"
+# Simplified logging - avoid problematic tracing packages
+# tracing = "0.1"
+# tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt"] }
+uuid = { version = "1.0", features = ["v4"] }
+async-trait = "0.1"
+parking_lot = "0.12"
+
+# Rate limiting for Jupiter API
+governor = "0.6"
+nonzero_ext = "0.3"
+fastrand = "2.0"
+
+# WebSocket dashboard dependencies
+tokio-tungstenite = "0.20"
+futures-util = "0.3"
+prometheus = "0.13"
+
+# Additional dependencies for production features
+spl-token = "4.0"
+
+# Secure wallet management dependencies
+aes-gcm = "0.10"
+pbkdf2 = "0.12"
+sha2 = "0.10"
+
+# CLI and testing dependencies
+clap = { version = "4.0", features = ["derive"] }
+
+# System dependencies
+libc = "0.2"

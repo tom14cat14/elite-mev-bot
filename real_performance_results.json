@@ -1,0 +1,73 @@
+{
+  "test_start": "2025-09-22T13:13:25.061985",
+  "architecture": "ShredStream UDP Primary + gRPC Backup",
+  "real_tests": {
+    "udp_primary": {
+      "tests_completed": 50,
+      "dns_resolution": {
+        "average_ms": 0.064,
+        "median_ms": 0.048,
+        "min_ms": 0.044,
+        "max_ms": 0.819
+      },
+      "socket_creation": {
+        "average_us": 3.209,
+        "median_us": 2.742,
+        "min_us": 2.146,
+        "max_us": 10.49
+      },
+      "udp_connection": {
+        "average_ms": 0.051,
+        "median_ms": 0.048,
+        "min_ms": 0.044,
+        "max_ms": 0.075,
+        "success_rate": 100.0
+      },
+      "performance_grade": "ELITE"
+    },
+    "grpc_backup": {
+      "tests_completed": 20,
+      "response_time": {
+        "average_ms": 16.69,
+        "median_ms": 16.316,
+        "min_ms": 15.095,
+        "max_ms": 22.992
+      },
+      "performance_grade": "EXCELLENT",
+      "status": "SUCCESS"
+    },
+    "concurrent_load": {
+      "concurrent_threads": 5,
+      "tests_per_thread": 10,
+      "total_tests": 50,
+      "total_duration_seconds": 0.002,
+      "tests_per_second": 24116.3,
+      "average_latency_ms": 0.16,
+      "concurrent_performance": "ELITE"
+    },
+    "end_to_end_pipeline": {
+      "pipelines_tested": 100,
+      "average_total_ms": 0.059,
+      "breakdown": {
+        "reception_ms": 0.057,
+        "detection_ms": 0.001,
+        "analysis_ms": 0.001,
+        "decision_ms": 0.0
+      },
+      "target_latency_ms": 15.0,
+      "target_achieved": true,
+      "performance_vs_target": "+99.6%",
+      "final_grade": "ELITE"
+    }
+  },
+  "final_summary": {
+    "test_completion": "2025-09-22T13:13:25.445704",
+    "primary_udp_latency_ms": 0.051,
+    "backup_grpc_latency_ms": 16.69,
+    "end_to_end_latency_ms": 0.059,
+    "target_achieved": true,
+    "performance_vs_target": "+99.6%",
+    "overall_grade": "ELITE",
+    "architecture_status": "OPTIMAL"
+  }
+}

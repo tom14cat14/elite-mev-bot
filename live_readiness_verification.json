@@ -1,0 +1,60 @@
+{
+  "timestamp": "2025-09-22T13:23:48.026892",
+  "checks": {
+    "configuration": {
+      "status": "PASS",
+      "details": {
+        "ENABLE_REAL_TRADING=true": true,
+        "PumpFun Program ID": true,
+        "Capital configured": true,
+        "Circuit breaker enabled": true,
+        "ShredStream primary": true
+      }
+    },
+    "source_code": {
+      "status": "PASS",
+      "details": {
+        "Real trading enabled": true,
+        "PumpFun integration": true,
+        "Real blockchain data": true,
+        "Jito bundle client": true
+      }
+    },
+    "pumpfun_integration": {
+      "status": "PASS",
+      "details": {
+        "Real program ID": true,
+        "Buy instruction": true,
+        "Sell instruction": true,
+        "Bonding curve math": true,
+        "Account derivation": true
+      }
+    },
+    "performance": {
+      "status": "PASS",
+      "details": {
+        "Target achieved": true,
+        "Elite grade": true,
+        "UDP primary working": true,
+        "gRPC backup ready": true
+      },
+      "latency_ms": 0.059
+    },
+    "build_dependencies": {
+      "status": "PASS",
+      "details": {
+        "Rust compiler": true,
+        "Cargo build tool": true,
+        "Cargo.toml exists": true,
+        "Source directory": true
+      }
+    }
+  },
+  "summary": {
+    "checks_passed": 5,
+    "total_checks": 5,
+    "pass_rate": 100.0,
+    "ready_for_live_trading": true,
+    "deployment_status": "READY"
+  }
+}
