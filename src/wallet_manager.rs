@@ -1,11 +1,10 @@
 use anyhow::Result;
 use solana_sdk::{
     pubkey::Pubkey,
-    signature::{Keypair, Signature},
+    signature::Keypair,
     signer::Signer,
     transaction::Transaction,
 };
-use std::str::FromStr;
 use tracing::{debug, info, warn};
 
 /// Wallet management for trading operations

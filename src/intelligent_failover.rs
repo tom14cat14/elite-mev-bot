@@ -1,8 +1,6 @@
-use anyhow::Result;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
-use tokio::time::sleep;
-use tracing::{info, warn, error};
+use std::time::Instant;
+use tracing::{info, warn};
 
 #[derive(Debug, Clone)]
 pub struct DataSourceConfig {

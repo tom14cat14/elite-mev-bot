@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use solana_sdk::{
-    signature::{Keypair, Signature, Signer},
+    signature::{Keypair, Signer},
     pubkey::Pubkey,
     transaction::Transaction,
 };

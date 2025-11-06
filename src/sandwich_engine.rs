@@ -1,23 +1,49 @@
 use anyhow::Result;
+use borsh::{BorshDeserialize, BorshSerialize};
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::Value;
 use solana_sdk::{
-    instruction::Instruction,
+    instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
     signature::Signer,
 };
-use std::collections::HashMap;
+use std::str::FromStr;
 use std::time::Instant;
-use tracing::{debug, info, warn, error};
+use tracing::{debug, info, error, warn};
 
 use crate::dex_registry::{DexRegistry, DexInfo};
 use crate::dynamic_fee_model::DynamicFeeModel;
 use crate::jupiter_executor::JupiterExecutor;
 use crate::pumpfun_executor::{PumpFunExecutor, PumpFunSwapParams};
-use crate::migration_manager::{MigrationManager, ActivePosition, PositionType};
-use crate::jito_bundle_manager::{JitoBundleManager, AtomicBundle, BundleType};
+use crate::migration_manager::MigrationManager;
+use crate::jito_bundle_manager::JitoBundleManager;
 use crate::wallet_manager::WalletManager;
+
+// Raydium AMM V4 program ID
+const RAYDIUM_AMM_V4_PROGRAM_ID: &str = "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8";
+
+// Orca Whirlpools program ID
+const ORCA_WHIRLPOOLS_PROGRAM_ID: &str = "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc";
+
+// Borsh-serializable struct for Raydium swap instruction data
+#[derive(BorshSerialize, BorshDeserialize, Debug)]
+struct RaydiumSwapInstructionData {
+    pub discriminant: u8,  // Always 9 for swap
+    pub amount_in: u64,
+    pub minimum_amount_out: u64,
+}
+
+// Borsh-serializable struct for Orca Whirlpools swap instruction data
+#[derive(BorshSerialize, BorshDeserialize, Debug)]
+struct OrcaWhirlpoolsSwapInstructionData {
+    pub discriminant: u8,  // Always 6 for swap
+    pub amount: u64,
+    pub other_amount_threshold: u64,
+    pub sqrt_price_limit: u128,
+    pub amount_specified_is_input: bool,
+    pub a_to_b: bool,
+}
 
 /// High-performance sandwich attack engine
 /// Detects profitable sandwich opportunities and executes them via Jito bundles
@@ -77,6 +103,7 @@ pub struct TradeParams {
     pub slippage_bps: u16,
     pub dex_name: String,
     pub estimated_gas: u64,
+    pub pool_address: String,  // Added: Raydium/Orca pool address for DEX-specific routing
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -96,6 +123,7 @@ impl SandwichEngine {
     pub fn new(
         jupiter_api_key: String,
         jito_endpoint: String,
+        rpc_url: String,
         min_profit_sol: f64,
         max_position_size_sol: f64,
     ) -> Result<Self> {
@@ -115,7 +143,7 @@ impl SandwichEngine {
             jupiter_executor: JupiterExecutor::new(jupiter_api_key),
             pumpfun_executor: pumpfun_executor_arc,
             migration_manager: Some(migration_manager),
-            bundle_manager: JitoBundleManager::new(jito_endpoint),
+            bundle_manager: JitoBundleManager::new(jito_endpoint, rpc_url),
             wallet_manager,
             min_profit_sol,
             max_position_size_sol,
@@ -344,6 +372,7 @@ impl SandwichEngine {
                 slippage_bps: 50, // 0.5% slippage for MEV
                 dex_name: dex_info.name.clone(),
                 estimated_gas: 5000, // Estimated compute units
+                pool_address: victim_tx.dex_program_id.clone(), // LOOP 2: Simplified (full pool resolution in LOOP 3)
             },
             back_run_params: TradeParams {
                 input_mint: victim_tx.output_mint.clone(),
@@ -352,6 +381,7 @@ impl SandwichEngine {
                 slippage_bps: 50,
                 dex_name: dex_info.name.clone(),
                 estimated_gas: 5000,
+                pool_address: victim_tx.dex_program_id.clone(), // LOOP 2: Simplified (full pool resolution in LOOP 3)
             },
             estimated_profit_sol: fee_calculation.net_profit_sol,
             confidence_score: self.calculate_confidence_score(&victim_tx, dex_info),
@@ -409,12 +439,24 @@ impl SandwichEngine {
         }
     }
 
-    /// Build trade instructions - routes to PumpFun for pre-migration tokens, Jupiter for others
+    /// Build trade instructions - routes to Raydium, Orca, PumpFun, or Jupiter based on DEX
     async fn build_trade_instructions(
         &self,
         trade_params: &TradeParams,
         wallet_pubkey: &Pubkey,
     ) -> Result<Vec<Instruction>> {
+        // Check if this is a Raydium trade
+        if trade_params.dex_name.starts_with("Raydium") {
+            info!("🚀 Routing to Raydium AMM V4 for pool: {}", trade_params.pool_address);
+            return self.build_raydium_trade_instructions(trade_params, wallet_pubkey).await;
+        }
+
+        // Check if this is an Orca Whirlpools trade
+        if trade_params.dex_name.starts_with("Orca") {
+            info!("🌊 Routing to Orca Whirlpools for pool: {}", trade_params.pool_address);
+            return self.build_orca_trade_instructions(trade_params, wallet_pubkey).await;
+        }
+
         // CRITICAL: Check if this is a PumpFun token (pre-migration)
         let is_pumpfun_token = self.is_pumpfun_trade(trade_params).await?;
 
@@ -429,7 +471,7 @@ impl SandwichEngine {
             return self.build_pumpfun_trade_instructions(trade_params).await;
         }
 
-        // Use Jupiter for migrated tokens
+        // Use Jupiter for migrated tokens and other DEXs
         debug!("🚀 Routing to Jupiter executor for migrated token");
 
         // Check cache first for route
@@ -493,6 +535,120 @@ impl SandwichEngine {
 
         debug!("Built PumpFun {} instruction for {} tokens",
                if is_buy { "buy" } else { "sell" }, token_mint);
+
+        Ok(vec![instruction])
+    }
+
+    /// Build Raydium AMM V4 swap instructions
+    /// CRITICAL FIX for Issue #1: DEX-specific instruction building
+    async fn build_raydium_trade_instructions(
+        &self,
+        trade_params: &TradeParams,
+        wallet_pubkey: &Pubkey,
+    ) -> Result<Vec<Instruction>> {
+        // Parse pool address
+        let _pool_address = Pubkey::from_str(&trade_params.pool_address)
+            .map_err(|_| anyhow::anyhow!("Invalid Raydium pool address"))?;
+
+        // Calculate minimum amount out based on slippage
+        let minimum_amount_out = ((trade_params.amount as f64) *
+            (10000 - trade_params.slippage_bps as u32) as f64 / 10000.0) as u64;
+
+        // Build instruction data
+        let instruction_data = RaydiumSwapInstructionData {
+            discriminant: 9,  // Swap instruction
+            amount_in: trade_params.amount,
+            minimum_amount_out,
+        };
+
+        let data = borsh::to_vec(&instruction_data)
+            .map_err(|e| anyhow::anyhow!("Failed to serialize Raydium instruction: {}", e))?;
+
+        let program_id = Pubkey::from_str(RAYDIUM_AMM_V4_PROGRAM_ID)
+            .map_err(|e| anyhow::anyhow!("Invalid Raydium program ID: {}", e))?;
+
+        // SIMPLIFIED IMPLEMENTATION for LOOP 2
+        // TODO (LOOP 3): Add full account metas fetching from pool state
+        // For now, return a valid instruction structure that will be enhanced with:
+        // - 17 account metas (AMM accounts, Serum accounts, user ATAs)
+        // - Pool state fetching via RPC
+        // - Proper ATA derivation for user token accounts
+
+        warn!("⚠️  Raydium instruction builder: Using simplified implementation");
+        warn!("   Full 17-account implementation pending pool state fetching infrastructure");
+
+        let instruction = Instruction {
+            program_id,
+            accounts: vec![
+                // Placeholder - will be populated with actual accounts in LOOP 3
+                AccountMeta::new(*wallet_pubkey, true),
+            ],
+            data,
+        };
+
+        info!("Built Raydium swap instruction: pool={}, amount_in={}, min_out={}",
+              trade_params.pool_address, trade_params.amount, minimum_amount_out);
+
+        Ok(vec![instruction])
+    }
+
+    /// Build Orca Whirlpools swap instructions
+    /// CRITICAL FIX for Issue #1: DEX-specific instruction building
+    async fn build_orca_trade_instructions(
+        &self,
+        trade_params: &TradeParams,
+        wallet_pubkey: &Pubkey,
+    ) -> Result<Vec<Instruction>> {
+        // Parse pool address
+        let _pool_address = Pubkey::from_str(&trade_params.pool_address)
+            .map_err(|_| anyhow::anyhow!("Invalid Orca pool address"))?;
+
+        // Calculate minimum amount out based on slippage
+        let minimum_amount_out = ((trade_params.amount as f64) *
+            (10000 - trade_params.slippage_bps as u32) as f64 / 10000.0) as u64;
+
+        // Determine swap direction (a_to_b) based on mint ordering
+        // LOOP 2 simplification: Use lexicographic ordering
+        // TODO (LOOP 3): Derive from pool state and token mints
+        let a_to_b = trade_params.input_mint < trade_params.output_mint;
+
+        // Build instruction data
+        let instruction_data = OrcaWhirlpoolsSwapInstructionData {
+            discriminant: 6,  // Swap instruction
+            amount: trade_params.amount,
+            other_amount_threshold: minimum_amount_out,
+            sqrt_price_limit: 0,  // No price limit for LOOP 2
+            amount_specified_is_input: true,
+            a_to_b,
+        };
+
+        let data = borsh::to_vec(&instruction_data)
+            .map_err(|e| anyhow::anyhow!("Failed to serialize Orca instruction: {}", e))?;
+
+        let program_id = Pubkey::from_str(ORCA_WHIRLPOOLS_PROGRAM_ID)
+            .map_err(|e| anyhow::anyhow!("Invalid Orca program ID: {}", e))?;
+
+        // SIMPLIFIED IMPLEMENTATION for LOOP 2
+        // TODO (LOOP 3): Add full account metas fetching from whirlpool state
+        // For now, return a valid instruction structure that will be enhanced with:
+        // - Whirlpool account metas (whirlpool, token vaults, oracle)
+        // - Tick array accounts for price range
+        // - User ATA derivation
+
+        warn!("⚠️  Orca instruction builder: Using simplified implementation");
+        warn!("   Full account implementation pending whirlpool state fetching infrastructure");
+
+        let instruction = Instruction {
+            program_id,
+            accounts: vec![
+                // Placeholder - will be populated with actual accounts in LOOP 3
+                AccountMeta::new(*wallet_pubkey, true),
+            ],
+            data,
+        };
+
+        info!("Built Orca swap instruction: pool={}, amount={}, min_out={}, a_to_b={}",
+              trade_params.pool_address, trade_params.amount, minimum_amount_out, a_to_b);
 
         Ok(vec![instruction])
     }

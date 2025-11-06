@@ -1,22 +1,51 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use std::sync::{Arc, Mutex};
 use reqwest::Client;
 use solana_sdk::{
-    transaction::Transaction,
-    signature::{Signature, Signer},
+    transaction::{Transaction, VersionedTransaction},
+    signature::Signer,
     pubkey::Pubkey,
     compute_budget::ComputeBudgetInstruction,
     system_instruction,
 };
+use solana_rpc_client::rpc_client::RpcClient;
+use borsh::BorshSerialize;
 use tokio::time::timeout;
 use tracing::{info, warn, error, debug};
 use uuid::Uuid;
 
+/// JITO Tip Floor API response (for 95th percentile dynamic tipping)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TipFloorResponse {
+    #[serde(rename = "landed_tips_25th_percentile")]
+    pub landed_tips_25th: f64,
+    #[serde(rename = "landed_tips_50th_percentile")]
+    pub landed_tips_50th: f64,
+    #[serde(rename = "landed_tips_75th_percentile")]
+    pub landed_tips_75th: f64,
+    #[serde(rename = "landed_tips_95th_percentile")]
+    pub landed_tips_95th: f64,
+    #[serde(rename = "landed_tips_99th_percentile")]
+    pub landed_tips_99th: f64,
+}
+
+/// Cached tip floor data with timestamp
+#[derive(Debug, Clone)]
+pub struct CachedTipFloor {
+    pub data: TipFloorResponse,
+    pub fetched_at: Instant,
+    pub cache_duration: Duration,
+}
+
+impl CachedTipFloor {
+    pub fn is_expired(&self) -> bool {
+        self.fetched_at.elapsed() > self.cache_duration
+    }
+}
+
 /// Production-ready Jito bundle client with HTTP submission
-#[derive(Debug)]
 pub struct JitoBundleClient {
     client: Client,
     block_engine_url: String,
@@ -26,6 +55,8 @@ pub struct JitoBundleClient {
     bundle_timeout: Duration,
     max_retries: usize,
     metrics: Arc<Mutex<JitoMetrics>>,
+    cached_tip_floor: Arc<Mutex<Option<CachedTipFloor>>>, // Cache for 95th percentile dynamic tips
+    rpc_client: Option<Arc<RpcClient>>, // For pre/post balance checks
 }
 
 #[derive(Debug, Clone)]
@@ -49,15 +80,15 @@ pub struct JitoBundle {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BundleSubmissionRequest {
     pub jsonrpc: String,
-    pub id: u64,
+    pub id: String,  // FIXED: Must be String per JITO API (not u64)
     pub method: String,
-    pub params: Vec<String>,
+    pub params: Vec<Vec<String>>,  // FIXED: Must be array of arrays per JITO API
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BundleSubmissionResponse {
     pub jsonrpc: String,
-    pub id: u64,
+    pub id: String,  // FIXED: Must be String to match request (not u64)
     pub result: Option<String>,
     pub error: Option<JitoError>,
 }
@@ -84,11 +115,12 @@ pub struct BundleTransaction {
 }
 
 impl JitoBundleClient {
-    /// Create new Jito bundle client with secure keypair reference
+    /// Create new Jito bundle client with secure keypair reference and RPC for balance checks
     pub fn new_with_keypair_ref(
         block_engine_url: String,
         relayer_url: String,
         auth_keypair: Arc<solana_sdk::signature::Keypair>,
+        rpc_url: Option<String>,
     ) -> Self {
         // Official Jito tip accounts for mainnet-beta
         let tip_accounts = vec![
@@ -102,6 +134,14 @@ impl JitoBundleClient {
             "3AVi9Tg9Uo68tJfuvoKvqKNWKkC5wPdSSdeBnizKZ6jT".parse().unwrap(),
         ];
 
+        // Initialize RPC client if URL provided (for pre/post balance checks)
+        let rpc_client = rpc_url.map(|url| {
+            Arc::new(RpcClient::new_with_timeout(
+                url,
+                Duration::from_secs(10)
+            ))
+        });
+
         Self {
             client: Client::builder()
                 .timeout(Duration::from_secs(30))
@@ -114,6 +154,8 @@ impl JitoBundleClient {
             bundle_timeout: Duration::from_secs(60),
             max_retries: 3,
             metrics: Arc::new(Mutex::new(JitoMetrics::default())),
+            cached_tip_floor: Arc::new(Mutex::new(None)), // Initialize empty cache
+            rpc_client,
         }
     }
 
@@ -148,6 +190,8 @@ impl JitoBundleClient {
             bundle_timeout: Duration::from_secs(60),
             max_retries: 3,
             metrics: Arc::new(Mutex::new(JitoMetrics::default())),
+            cached_tip_floor: Arc::new(Mutex::new(None)), // Initialize empty cache
+            rpc_client: None, // No RPC client in legacy constructor
         }
     }
 
@@ -157,6 +201,16 @@ impl JitoBundleClient {
         transactions: Vec<Transaction>,
         tip_lamports: Option<u64>,
     ) -> Result<String> {
+        self.submit_bundle_with_blockhash(transactions, tip_lamports, None).await
+    }
+
+    /// Submit bundle with explicit blockhash for tip transaction
+    pub async fn submit_bundle_with_blockhash(
+        &self,
+        transactions: Vec<Transaction>,
+        tip_lamports: Option<u64>,
+        blockhash: Option<solana_sdk::hash::Hash>,
+    ) -> Result<String> {
         let start_time = Instant::now();
 
         // Calculate optimal tip if not provided
@@ -165,18 +219,36 @@ impl JitoBundleClient {
         // Select random tip account for load balancing
         let tip_account = self.tip_accounts[fastrand::usize(..self.tip_accounts.len())];
 
-        // Create tip transaction
-        let tip_tx = self.create_tip_transaction(tip_amount, tip_account)?;
+        // Extract blockhash from first transaction if not provided
+        let blockhash_to_use = blockhash.or_else(|| {
+            transactions.first().map(|tx| tx.message.recent_blockhash)
+        }).unwrap_or_else(|| {
+            warn!("⚠️  No valid blockhash available - tip transaction may fail!");
+            solana_sdk::hash::Hash::default()
+        });
+
+        // TODO: Integrate tip INTO main transaction (JITO best practice)
+        // Current risk: Separate tip transaction vulnerable to uncle bandit attacks
+        // if block is uncled, tip could be paid even if trade fails
+        // Fix requires rebuilding transaction with tip instruction included
+
+        // Create separate tip transaction (temporary - should be integrated)
+        let tip_tx = self.create_tip_transaction(tip_amount, tip_account, blockhash_to_use)?;
 
         // Combine user transactions with tip transaction
         let mut bundle_transactions = transactions;
         bundle_transactions.push(tip_tx);
 
-        // Convert to base58 encoded strings
+        warn!("⚠️  Using separate tip transaction (uncle bandit risk) - TODO: integrate into main tx");
+
+        // Convert to base58 encoded strings (JITO requirement)
+        // NOTE: JITO docs say "base64 preferred" but actual working implementation uses base58!
+        // Verified from working Arb_Bot implementation
         let encoded_transactions: Result<Vec<String>> = bundle_transactions
             .iter()
             .map(|tx| {
-                let serialized = bincode::serialize(tx)?;
+                let serialized = bincode::serialize(tx)
+                    .map_err(|e| anyhow::anyhow!("Transaction serialization error: {}", e))?;
                 Ok(bs58::encode(serialized).into_string())
             })
             .collect();
@@ -244,15 +316,15 @@ impl JitoBundleClient {
     async fn submit_bundle_once(&self, bundle: &JitoBundle) -> Result<String> {
         let request = BundleSubmissionRequest {
             jsonrpc: "2.0".to_string(),
-            id: fastrand::u64(..),
+            id: format!("bundle_{}", fastrand::u64(..)),  // FIXED: String ID per JITO API
             method: "sendBundle".to_string(),
-            params: bundle.transactions.clone(),
+            params: vec![bundle.transactions.clone()],  // FIXED: Wrapped in array per JITO API
         };
 
         let response = timeout(
             Duration::from_secs(30),
             self.client
-                .post(&format!("{}/api/v1/bundles", self.relayer_url))
+                .post(&format!("{}/api/v1/bundles", self.block_engine_url))
                 .header("Content-Type", "application/json")
                 .json(&request)
                 .send(),
@@ -283,6 +355,7 @@ impl JitoBundleClient {
         &self,
         tip_lamports: u64,
         tip_account: Pubkey,
+        recent_blockhash: solana_sdk::hash::Hash,
     ) -> Result<Transaction> {
         let auth_keypair = self.auth_keypair
             .as_ref()
@@ -297,8 +370,6 @@ impl JitoBundleClient {
         // Add compute budget to ensure tip transaction processes quickly
         let compute_budget_instruction = ComputeBudgetInstruction::set_compute_unit_price(50_000);
 
-        let recent_blockhash = solana_sdk::hash::Hash::default(); // Should be fetched from RPC
-
         let transaction = Transaction::new_signed_with_payer(
             &[compute_budget_instruction, tip_instruction],
             Some(&auth_keypair.pubkey()),
@@ -309,38 +380,162 @@ impl JitoBundleClient {
         Ok(transaction)
     }
 
-    /// Calculate optimal tip based on current network conditions
+    /// Get cached tip floor data (returns None if cache is empty or expired)
+    pub fn get_cached_tip_floor(&self) -> Option<TipFloorResponse> {
+        if let Ok(cache_guard) = self.cached_tip_floor.lock() {
+            if let Some(cached) = cache_guard.as_ref() {
+                if !cached.is_expired() {
+                    return Some(cached.data.clone());
+                }
+            }
+        }
+        None
+    }
+
+    /// Start background task to keep tip floor cache fresh (call once at startup)
+    pub fn start_tip_floor_refresh(&self) {
+        let client_clone = self.client.clone();
+        let cache_clone = self.cached_tip_floor.clone();
+
+        tokio::spawn(async move {
+            info!("🔄 Starting JITO tip floor refresh task (10 minute interval)...");
+
+            loop {
+                // Wait 10 minutes between fetches (user requested - fresher data)
+                tokio::time::sleep(Duration::from_secs(600)).await;
+
+                // Fetch fresh tip floor data
+                let url = "https://bundles.jito.wtf/api/v1/bundles/tip_floor";
+
+                match client_clone
+                    .get(url)
+                    .timeout(Duration::from_secs(5))
+                    .send()
+                    .await
+                {
+                    Ok(response) => {
+                        match response.json::<TipFloorResponse>().await {
+                            Ok(tip_floor) => {
+                                // Update cache
+                                if let Ok(mut cache_guard) = cache_clone.lock() {
+                                    *cache_guard = Some(CachedTipFloor {
+                                        data: tip_floor.clone(),
+                                        fetched_at: Instant::now(),
+                                        cache_duration: Duration::from_secs(600), // 10 minutes
+                                    });
+                                    info!("💰 Tip floor refreshed: 95th = {:.6} SOL | 99th = {:.6} SOL",
+                                          tip_floor.landed_tips_95th / 1_000_000_000.0,
+                                          tip_floor.landed_tips_99th / 1_000_000_000.0);
+                                }
+                            }
+                            Err(e) => {
+                                warn!("⚠️ Failed to parse tip floor response: {}", e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!("⚠️ Failed to fetch tip floor: {}", e);
+                    }
+                }
+            }
+        });
+    }
+
+    /// Fetch tip floor data from JITO API with caching (60 second cache)
+    async fn fetch_tip_floor(&self) -> Result<TipFloorResponse> {
+        // Check cache first
+        if let Ok(cache_guard) = self.cached_tip_floor.lock() {
+            if let Some(cached) = cache_guard.as_ref() {
+                if !cached.is_expired() {
+                    debug!("💰 Using cached tip floor (95th: {:.6} SOL)",
+                           cached.data.landed_tips_95th / 1_000_000_000.0);
+                    return Ok(cached.data.clone());
+                }
+            }
+        }
+
+        // Cache expired or empty, fetch from API
+        let url = "https://bundles.jito.wtf/api/v1/bundles/tip_floor";
+        debug!("🌐 Fetching fresh tip floor data from JITO API...");
+
+        let response = self.client
+            .get(url)
+            .timeout(Duration::from_secs(5))
+            .send()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to fetch tip floor: {}", e))?;
+
+        let tip_floor: TipFloorResponse = response
+            .json()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to parse tip floor response: {}", e))?;
+
+        // Update cache
+        if let Ok(mut cache_guard) = self.cached_tip_floor.lock() {
+            *cache_guard = Some(CachedTipFloor {
+                data: tip_floor.clone(),
+                fetched_at: Instant::now(),
+                cache_duration: Duration::from_secs(600), // 10 minutes
+            });
+            info!("💰 Tip floor updated: 95th = {:.6} SOL | 99th = {:.6} SOL",
+                  tip_floor.landed_tips_95th / 1_000_000_000.0,
+                  tip_floor.landed_tips_99th / 1_000_000_000.0);
+        }
+
+        Ok(tip_floor)
+    }
+
+    /// Calculate optimal tip using JITO's 95th percentile (aggressive MEV strategy)
     fn calculate_optimal_tip(&self) -> u64 {
-        // Base tip amount
-        let base_tip = 10_000u64; // 0.00001 SOL
+        // Try to use 95th percentile from JITO API (user requested "95% for mev")
+        // This is async, so we'll spawn a task and use fallback immediately
+        let cached_tip_floor = self.cached_tip_floor.clone();
+
+        // Check if we have cached data
+        if let Ok(cache_guard) = cached_tip_floor.lock() {
+            if let Some(cached) = cache_guard.as_ref() {
+                if !cached.is_expired() {
+                    // Use 95th percentile as requested by user
+                    let tip_95th = (cached.data.landed_tips_95th * 1_000_000_000.0) as u64;
+                    debug!("💰 Using 95th percentile tip: {} lamports ({:.6} SOL)",
+                           tip_95th, tip_95th as f64 / 1_000_000_000.0);
+                    return tip_95th;
+                }
+            }
+        }
+
+        // Fallback: Use old calculation if no cached data available
+        warn!("⚠️ No cached tip floor data, using fallback calculation");
+
+        let base_tip = 50_000u64; // 0.00005 SOL fallback
 
         // Adjust based on recent success rate and confirmation times
         let (success_rate_multiplier, latency_multiplier) = if let Ok(metrics) = self.metrics.lock() {
             let success_rate_mult = if metrics.bundle_success_rate < 0.5 {
-                2.0 // Double tip if success rate is low
+                3.0 // Triple tip if success rate is low (more competitive)
             } else if metrics.bundle_success_rate > 0.9 {
-                0.8 // Reduce tip if success rate is high
+                0.9 // Slightly reduce if high success
             } else {
-                1.0
+                1.5 // Default to 1.5x for medium success
             };
 
             let latency_mult = if metrics.average_confirmation_time_ms > 5000.0 {
-                1.5 // Increase tip if confirmations are slow
+                2.0 // Double if confirmations are slow
             } else if metrics.average_confirmation_time_ms < 2000.0 {
-                0.9 // Slightly reduce tip if confirmations are fast
+                1.0 // Keep base if fast
             } else {
-                1.0
+                1.3 // Increase slightly for medium latency
             };
 
             (success_rate_mult, latency_mult)
         } else {
-            (1.0, 1.0) // Default multipliers if mutex is poisoned
+            (1.5, 1.3) // Default multipliers (more aggressive)
         };
 
         let optimal_tip = (base_tip as f64 * success_rate_multiplier * latency_multiplier) as u64;
 
-        // Cap tip at reasonable maximum
-        optimal_tip.min(100_000) // Max 0.0001 SOL
+        // Increased cap for high-quality opportunities
+        optimal_tip.min(500_000) // Max 0.0005 SOL (increased from 0.0001)
     }
 
     /// Monitor bundle status and update metrics
@@ -463,6 +658,75 @@ impl JitoBundleClient {
             Ok(Ok(resp)) => Ok(resp.status().is_success()),
             _ => Ok(false),
         }
+    }
+
+    /// Check account balance (for pre/post bundle checks)
+    fn check_balance(&self, pubkey: &Pubkey) -> Result<u64> {
+        if let Some(ref rpc) = self.rpc_client {
+            let balance = rpc.get_balance(pubkey)
+                .map_err(|e| anyhow::anyhow!("Failed to get balance: {}", e))?;
+            Ok(balance)
+        } else {
+            Err(anyhow::anyhow!("RPC client not configured for balance checks"))
+        }
+    }
+
+    /// Perform pre/post balance verification (JITO best practice)
+    pub async fn verify_bundle_execution(
+        &self,
+        wallet_pubkey: &Pubkey,
+        expected_change_lamports: i64,
+        tip_lamports: u64,
+    ) -> Result<()> {
+        if self.rpc_client.is_none() {
+            debug!("Balance verification disabled (no RPC client configured)");
+            return Ok(());
+        }
+
+        // Pre-submission balance check
+        let pre_balance = self.check_balance(wallet_pubkey)?;
+        info!("💵 Pre-bundle balance: {} lamports ({:.6} SOL)",
+              pre_balance, pre_balance as f64 / 1_000_000_000.0);
+
+        // Wait for bundle to process (simplified - in production, monitor bundle status)
+        tokio::time::sleep(Duration::from_secs(5)).await;
+
+        // Post-submission balance check
+        let post_balance = self.check_balance(wallet_pubkey)?;
+        info!("💵 Post-bundle balance: {} lamports ({:.6} SOL)",
+              post_balance, post_balance as f64 / 1_000_000_000.0);
+
+        // Calculate actual change
+        let actual_change = post_balance as i64 - pre_balance as i64;
+
+        // Expected change: profit from trade minus tip
+        // Note: Negative expected_change means we spent money (buy), positive means we earned (sell)
+        let expected_total_change = expected_change_lamports - tip_lamports as i64;
+
+        info!("💵 Balance change: Actual = {} lamports | Expected = {} lamports (including {} tip)",
+              actual_change, expected_total_change, tip_lamports);
+
+        // Check if only tip was paid (uncle bandit scenario)
+        if actual_change < 0 && actual_change.abs() <= (tip_lamports as i64 * 2) {
+            // Lost money, but only around tip amount → possible unbundled transaction
+            warn!("⚠️  UNCLE BANDIT WARNING: Lost ~{} lamports (close to tip {}), trade may not have executed!",
+                  actual_change.abs(), tip_lamports);
+            return Err(anyhow::anyhow!("Possible unbundled transaction detected"));
+        }
+
+        // Check if change is in expected range (allow 10% variance for fees)
+        let variance_threshold = (expected_total_change.abs() as f64 * 0.10) as i64;
+        let diff = (actual_change - expected_total_change).abs();
+
+        if diff > variance_threshold && diff > 100_000 {
+            // More than 10% variance and >0.0001 SOL difference
+            warn!("⚠️  Unexpected balance change: diff = {} lamports ({:.6} SOL)",
+                  diff, diff as f64 / 1_000_000_000.0);
+        } else {
+            info!("✅ Balance change verified (within expected range)");
+        }
+
+        Ok(())
     }
 }
 

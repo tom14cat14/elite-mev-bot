@@ -4,19 +4,24 @@ use serde::{Deserialize, Serialize};
 use solana_sdk::{
     instruction::Instruction,
     message::Message,
-    signature::Signer,
+    signature::{Signer, Signature},
     transaction::Transaction,
 };
+use solana_client::rpc_client::RpcClient;
+use solana_transaction_status::{
+    EncodedTransaction, TransactionBinaryEncoding, UiTransactionEncoding,
+};
+use std::str::FromStr;
 use std::time::{Duration, Instant};
 use tracing::{debug, info, warn, error};
 use uuid::Uuid;
 
 /// High-performance atomic bundle manager for Jito MEV execution
 /// Target: 58ms bundle creation (85% below 400ms Solana block time)
-#[derive(Clone)]
 pub struct JitoBundleManager {
     jito_endpoint: String,
     client: reqwest::Client,
+    rpc_client: RpcClient,
     bundle_stats: BundleStats,
     max_bundle_size: usize,
     priority_fee_calculator: PriorityFeeCalculator,
@@ -76,26 +81,57 @@ struct JitoBundleResponse {
 
 impl JitoBundleManager {
     /// Create new Jito bundle manager optimized for <58ms bundle creation
-    pub fn new(jito_endpoint: String) -> Self {
+    pub fn new(jito_endpoint: String, rpc_url: String) -> Self {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_millis(500)) // Fast timeout for MEV speed
             .build()
             .expect("Failed to create HTTP client");
 
+        let rpc_client = RpcClient::new(rpc_url);
+
         Self {
             jito_endpoint,
             client,
+            rpc_client,
             bundle_stats: BundleStats::default(),
             max_bundle_size: 5, // Jito limit
             priority_fee_calculator: PriorityFeeCalculator::new(),
         }
     }
 
+    /// Fetch full victim transaction from RPC (CRITICAL FIX for JITO bundle inclusion)
+    async fn fetch_victim_transaction(&self, signature: &str) -> Result<String> {
+        debug!("🔍 Fetching full victim transaction: {}", signature);
+
+        // Parse signature
+        let sig = Signature::from_str(signature)
+            .map_err(|e| anyhow::anyhow!("Invalid signature: {}", e))?;
+
+        // Fetch full transaction from RPC
+        let tx_data = self.rpc_client
+            .get_transaction(&sig, UiTransactionEncoding::Base58)
+            .map_err(|e| anyhow::anyhow!("Failed to fetch victim transaction: {}", e))?;
+
+        // Extract the encoded transaction
+        let encoded_tx = match tx_data.transaction.transaction {
+            EncodedTransaction::Binary(data, encoding) => {
+                match encoding {
+                    TransactionBinaryEncoding::Base58 => data,
+                    _ => return Err(anyhow::anyhow!("Unexpected encoding: {:?}", encoding)),
+                }
+            },
+            _ => return Err(anyhow::anyhow!("Unexpected transaction format")),
+        };
+
+        debug!("✅ Victim transaction fetched successfully: {} bytes", encoded_tx.len());
+        Ok(encoded_tx)
+    }
+
     /// Create atomic sandwich attack bundle - target <58ms
     pub async fn create_sandwich_bundle(
         &mut self,
         front_run_instructions: Vec<Instruction>,
-        victim_tx_hash: String,
+        victim_tx_signature: String,
         back_run_instructions: Vec<Instruction>,
         wallet_keypair: &solana_sdk::signature::Keypair,
         recent_blockhash: solana_sdk::hash::Hash,
@@ -113,6 +149,14 @@ impl JitoBundleManager {
             priority_fee,
         )?;
 
+        // CRITICAL FIX: Fetch FULL victim transaction (not just signature)
+        // This ensures JITO bundle atomicity: frontrun -> victim -> backrun
+        let victim_tx_full = self.fetch_victim_transaction(&victim_tx_signature).await
+            .map_err(|e| {
+                error!("❌ Failed to fetch victim transaction: {}", e);
+                e
+            })?;
+
         // Build back-run transaction
         let back_run_tx = self.build_transaction(
             back_run_instructions,
@@ -125,13 +169,13 @@ impl JitoBundleManager {
             bundle_id: Uuid::new_v4().to_string(),
             transactions: vec![
                 bs58::encode(bincode::serialize(&front_run_tx)?).into_string(),
-                victim_tx_hash.clone(), // User's transaction we're sandwiching
+                victim_tx_full, // FIXED: Full transaction data (not just signature)
                 bs58::encode(bincode::serialize(&back_run_tx)?).into_string(),
             ],
             created_at: Utc::now(),
             bundle_type: BundleType::SandwichAttack {
                 front_run_tx: bs58::encode(bincode::serialize(&front_run_tx)?).into_string(),
-                victim_tx: victim_tx_hash,
+                victim_tx: victim_tx_signature,
                 back_run_tx: bs58::encode(bincode::serialize(&back_run_tx)?).into_string(),
             },
             estimated_profit: 0.0, // Will be calculated by caller
@@ -254,8 +298,50 @@ impl JitoBundleManager {
         Ok(bundle)
     }
 
+    /// Simulate bundle transactions before submission (CRITICAL FIX - Issue #6)
+    /// Prevents wasted JITO tips on invalid bundles
+    async fn simulate_bundle(&self, bundle: &AtomicBundle) -> Result<()> {
+        debug!("🧪 Simulating bundle before submission: {}", bundle.bundle_id);
+
+        for (i, tx_b58) in bundle.transactions.iter().enumerate() {
+            // Decode transaction from base58
+            let tx_bytes = bs58::decode(tx_b58)
+                .into_vec()
+                .map_err(|e| anyhow::anyhow!("Failed to decode transaction {}: {}", i, e))?;
+
+            // Deserialize to get transaction structure
+            let tx: solana_sdk::transaction::Transaction = bincode::deserialize(&tx_bytes)
+                .map_err(|e| anyhow::anyhow!("Failed to deserialize transaction {}: {}", i, e))?;
+
+            // Simulate transaction via RPC
+            let simulation_result = self.rpc_client
+                .simulate_transaction(&tx)
+                .map_err(|e| anyhow::anyhow!("Failed to simulate transaction {}: {}", i, e))?;
+
+            // Check for errors in simulation
+            if let Some(err) = simulation_result.value.err {
+                error!("❌ Transaction {} simulation failed: {:?}", i, err);
+                error!("   Bundle {} will NOT be submitted (would waste JITO tip)", bundle.bundle_id);
+                return Err(anyhow::anyhow!("Transaction {} simulation failed: {:?}", i, err));
+            }
+
+            debug!("✅ Transaction {} simulation passed", i);
+        }
+
+        info!("✅ All {} transactions simulated successfully", bundle.transactions.len());
+        Ok(())
+    }
+
     /// Submit bundle to Jito for execution
     pub async fn submit_bundle(&mut self, bundle: &AtomicBundle) -> Result<String> {
+        // CRITICAL FIX (Issue #6): Simulate bundle before submission
+        // This prevents wasted JITO tips on invalid bundles
+        if let Err(e) = self.simulate_bundle(bundle).await {
+            warn!("⚠️  Bundle simulation failed, skipping submission: {}", e);
+            self.bundle_stats.failed_submissions += 1;
+            return Err(e);
+        }
+
         let submit_start = Instant::now();
 
         let payload = serde_json::json!({
@@ -404,7 +490,10 @@ mod tests {
 
     #[test]
     fn test_bundle_manager_creation() {
-        let manager = JitoBundleManager::new("https://jito-test.com".to_string());
+        let manager = JitoBundleManager::new(
+            "https://jito-test.com".to_string(),
+            "https://api.mainnet-beta.solana.com".to_string(),
+        );
         assert_eq!(manager.max_bundle_size, 5);
         assert_eq!(manager.bundle_stats.total_bundles_created, 0);
     }
@@ -418,7 +507,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_bundle_stats_update() {
-        let mut manager = JitoBundleManager::new("https://jito-test.com".to_string());
+        let mut manager = JitoBundleManager::new(
+            "https://jito-test.com".to_string(),
+            "https://api.mainnet-beta.solana.com".to_string(),
+        );
 
         // Simulate fast bundle creation (below target)
         manager.update_bundle_stats(45);

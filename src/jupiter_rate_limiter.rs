@@ -117,7 +117,7 @@ impl JupiterRateLimiter {
 
     async fn apply_burst_protection(&self) {
         let (wait_time, min_interval_ms) = {
-            let mut burst = self.burst_protection.lock();
+            let burst = self.burst_protection.lock();
 
             let wait_time = if let Some(last_request) = burst.last_request {
                 let elapsed = last_request.elapsed();

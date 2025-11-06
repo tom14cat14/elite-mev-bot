@@ -2,16 +2,16 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use solana_sdk::{
-    instruction::{Instruction, CompiledInstruction},
+    instruction::CompiledInstruction,
     pubkey::Pubkey,
     transaction::Transaction,
 };
 use std::collections::HashMap;
 use std::str::FromStr;
-use tracing::{debug, info, warn, error};
+use tracing::{debug, info};
 
 use crate::dex_registry::{DexRegistry, DexInfo};
-use crate::dynamic_fee_model::{DynamicFeeModel, FeeCalculation};
+use crate::dynamic_fee_model::DynamicFeeModel;
 
 /// Real-time transaction processor for MEV opportunities
 pub struct TransactionProcessor {

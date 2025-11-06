@@ -2,7 +2,6 @@ use anyhow::Result;
 use shared_bot_infrastructure::*;
 use std::time::{Duration, Instant};
 use tokio::signal;
-use std::sync::{Arc, Mutex};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

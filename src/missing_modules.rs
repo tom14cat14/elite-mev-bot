@@ -5,7 +5,6 @@ use anyhow::Result;
 use solana_sdk::{pubkey::Pubkey, signature::{Keypair, Signer}, instruction::Instruction, transaction::Transaction};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use serde_json::Value;
 
 // WebSocket Dashboard Stubs
 pub mod websocket_dashboard {

@@ -1,25 +1,21 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use futures::StreamExt;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::Value;
 use solana_stream_sdk::{CommitmentLevel, ShredstreamClient};
 use solana_sdk::{
     pubkey::Pubkey,
     signature::Signature,
-    transaction::{Transaction, VersionedTransaction},
-    instruction::{Instruction, CompiledInstruction},
-    message::Message,
-    hash::Hash,
+    transaction::VersionedTransaction,
 };
 use solana_entry::entry::Entry;
 use bincode;
-use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::mpsc;
-use tracing::{debug, info, warn, error};
+use tracing::{debug, info, warn};
 
-use crate::arbitrage_engine::{ArbitrageEngine, ArbitrageExecution};
+use crate::arbitrage_engine::ArbitrageEngine;
 
 /// Stream data structure for ultra-fast processing
 #[derive(Debug, Clone)]
@@ -28,11 +24,11 @@ pub struct StreamData {
     pub slot: u64,
     pub timestamp: std::time::Instant,
 }
-use crate::sandwich_engine::{SandwichEngine, SandwichExecution, SandwichOpportunity};
-use crate::liquidation_engine::{LiquidationEngine, LiquidationExecution};
+use crate::sandwich_engine::SandwichEngine;
+use crate::liquidation_engine::LiquidationEngine;
 use crate::database_tracker::DatabaseTracker;
 use crate::dex_registry::DexRegistry;
-use crate::microcap_filter::{MicroCapFilter, MicroCapOpportunity};
+use crate::microcap_filter::MicroCapFilter;
 
 /// PumpFun program ID for pre-migration token filtering
 const PUMPFUN_PROGRAM_ID: &str = "PumpFunP4PfMpqd7KsAEL7NKPhpq6M4yDmMRr2tH6gN";
@@ -134,6 +130,7 @@ impl MempoolMonitor {
         shredstream_endpoint: String,
         jupiter_api_key: String,
         jito_endpoint: String,
+        rpc_url: String,
         config: MonitorConfig,
     ) -> Result<Self> {
         info!("🔌 Connecting to ShredStream: {}", shredstream_endpoint);
@@ -163,6 +160,7 @@ impl MempoolMonitor {
         let sandwich_engine = SandwichEngine::new(
             jupiter_api_key.clone(),
             jito_endpoint.clone(),
+            rpc_url.clone(),
             0.1, // 0.1 SOL minimum profit
             10.0, // 10 SOL max position
         )?;
@@ -171,6 +169,7 @@ impl MempoolMonitor {
         let arbitrage_engine = ArbitrageEngine::new(
             jupiter_api_key.clone(),
             jito_endpoint.clone(),
+            rpc_url.clone(),
             0.05, // 0.05 SOL minimum profit (lower threshold)
             5.0, // 5 SOL max position
         )?;
@@ -179,6 +178,7 @@ impl MempoolMonitor {
         let liquidation_engine = LiquidationEngine::new(
             jupiter_api_key,
             jito_endpoint,
+            rpc_url,
             0.1, // 0.1 SOL minimum profit
             5.0, // 5 SOL max position
         )?;

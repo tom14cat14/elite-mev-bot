@@ -45,6 +45,10 @@ path = "src/bin/test_shredstream_data.rs"
 name = "elite_mev_bot_v2_1_production_safe"
 path = "src/bin/elite_mev_bot_v2_1_production_safe.rs"
 
+[[bin]]
+name = "test_real_shredstream_grpc"
+path = "src/bin/test_real_shredstream_grpc.rs"
+
 [dependencies]
 # Core async runtime with all required features
 tokio = { version = "1.21", features = ["rt-multi-thread", "macros", "time", "sync", "net", "fs"] }
@@ -63,11 +67,14 @@ chrono = "0.4.26"
 # UUID generation
 uuid = { version = "1.0", features = ["v4"] }
 
+# Lazy static initialization
+once_cell = "1.19"
+
 # Fast random numbers
 fastrand = "2.0"
 
-# Network client
-reqwest = { version = "0.11", features = ["json"] }
+# Network client with gzip compression for RPC calls (70-90% size reduction)
+reqwest = { version = "0.11", features = ["json", "gzip"] }
 
 # System dependencies
 libc = "0.2"
@@ -85,6 +92,8 @@ solana-rpc-client = "=2.2.1"
 solana-sdk = "=2.2.1"
 bs58 = "0.5"
 hex = "0.4"
+base64 = "0.21"
+borsh = "0.10"  # For Borsh serialization (Solana transaction wire format)
 
 # Rate limiting
 governor = "0.6"

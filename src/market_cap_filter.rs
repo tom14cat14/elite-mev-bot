@@ -2,8 +2,8 @@ use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
-use serde::{Deserialize, Serialize};
-use tracing::{info, warn, debug};
+use serde::Serialize;
+use tracing::{info, warn};
 use crate::simd_bincode::SafeSimdBincode;
 
 /// Market cap thresholds for upfront filtering

@@ -3,14 +3,13 @@ use serde::{Deserialize, Serialize};
 use solana_sdk::{
     instruction::{Instruction, AccountMeta},
     pubkey::Pubkey,
-    signature::{Keypair, Signature},
-    system_instruction,
+    signature::Signature,
     transaction::Transaction,
     message::Message,
 };
 use std::str::FromStr;
 use std::time::Instant;
-use tracing::{debug, info, warn, error};
+use tracing::{debug, info, warn};
 
 use crate::wallet_manager::WalletManager;
 

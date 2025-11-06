@@ -1,21 +1,18 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde::Serialize;
 use solana_sdk::{
     instruction::Instruction,
-    pubkey::Pubkey,
     signature::Signer,
 };
-use std::str::FromStr;
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
-use tracing::{debug, info, warn, error};
+use tracing::{debug, info, error};
 
 use crate::dex_registry::{DexRegistry, DexInfo};
 use crate::dynamic_fee_model::DynamicFeeModel;
 use crate::jupiter_executor::JupiterExecutor;
-use crate::jito_bundle_manager::{JitoBundleManager, AtomicBundle};
+use crate::jito_bundle_manager::JitoBundleManager;
 use crate::wallet_manager::WalletManager;
 
 /// High-performance arbitrage engine for cross-DEX price differences
@@ -95,6 +92,7 @@ impl ArbitrageEngine {
     pub fn new(
         jupiter_api_key: String,
         jito_endpoint: String,
+        rpc_url: String,
         min_profit_sol: f64,
         max_position_size_sol: f64,
     ) -> Result<Self> {
@@ -104,7 +102,7 @@ impl ArbitrageEngine {
             dex_registry: DexRegistry::new(),
             fee_model: DynamicFeeModel::new(),
             jupiter_executor: JupiterExecutor::new(jupiter_api_key),
-            bundle_manager: JitoBundleManager::new(jito_endpoint),
+            bundle_manager: JitoBundleManager::new(jito_endpoint, rpc_url),
             wallet_manager,
             min_profit_sol,
             max_position_size_sol,
@@ -507,7 +505,7 @@ impl ArbitrageEngine {
         // Check if opportunity is profitable (>0.1% spread + fees)
         if percentage_diff > 0.2 { // 0.2% minimum for profitability after fees
             let estimated_amount = (self.max_position_size_sol / min_price.price).min(
-                (min_price.liquidity as f64 / 4.0) // Use max 25% of liquidity
+                min_price.liquidity as f64 / 4.0 // Use max 25% of liquidity
             );
             let estimated_profit = price_diff * estimated_amount * 0.95; // 95% efficiency
 

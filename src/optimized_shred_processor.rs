@@ -1,12 +1,8 @@
 use anyhow::Result;
-use std::sync::Arc;
 use std::time::Instant;
-use tracing::{info, debug, warn};
+use tracing::{info, warn};
 use solana_entry::entry::Entry;
-use solana_sdk::{
-    signature::Signature,
-    transaction::VersionedTransaction,
-};
+use solana_sdk::transaction::VersionedTransaction;
 
 use crate::simd_bincode::SafeSimdBincode;
 use crate::market_cap_filter::{ShredStreamTokenFilter, MarketCapThresholds, TokenMetrics};

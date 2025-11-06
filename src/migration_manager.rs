@@ -4,10 +4,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tokio::time::{interval, Duration};
-use tracing::{debug, info, warn, error};
+use tracing::{debug, info, warn};
 
 use crate::pumpfun_executor::PumpFunExecutor;
-use crate::sandwich_engine::SandwichEngine;
 
 /// Tracks active positions and monitors for PumpFun token migrations
 pub struct MigrationManager {

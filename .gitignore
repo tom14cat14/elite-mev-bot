@@ -1,11 +1,9 @@
 # Rust build artifacts
-/target/
+target/
 **/*.rs.bk
 *.pdb
 
 # Compiled binaries
-/target/debug/
-/target/release/
 *.exe
 
 # Cargo
@@ -14,10 +12,6 @@ Cargo.lock
 # Environment variables
 .env
 !.env.example
-!.env.template
-!.env.elite_example
-!.env.mev_example
-!.env.microcap
 
 # IDE
 .vscode/
@@ -48,3 +42,6 @@ nohup.out
 *.so
 *.dylib
 *.dll
+
+# Wallets (sensitive data)
+wallets/

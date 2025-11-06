@@ -1,20 +1,18 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde::Serialize;
 use solana_sdk::{
     instruction::Instruction,
-    pubkey::Pubkey,
     signature::Signer,
 };
 use std::collections::HashMap;
 use std::time::Instant;
-use tracing::{debug, info, warn, error};
+use tracing::{debug, info, error};
 
 use crate::dex_registry::DexRegistry;
 use crate::dynamic_fee_model::DynamicFeeModel;
 use crate::jupiter_executor::JupiterExecutor;
-use crate::jito_bundle_manager::{JitoBundleManager, AtomicBundle, BundleType};
+use crate::jito_bundle_manager::JitoBundleManager;
 use crate::wallet_manager::WalletManager;
 
 /// High-performance liquidation engine for DeFi protocols
@@ -179,6 +177,7 @@ impl LiquidationEngine {
     pub fn new(
         jupiter_api_key: String,
         jito_endpoint: String,
+        rpc_url: String,
         min_profit_sol: f64,
         max_position_size_sol: f64,
     ) -> Result<Self> {
@@ -188,7 +187,7 @@ impl LiquidationEngine {
             dex_registry: DexRegistry::new(),
             fee_model: DynamicFeeModel::new(),
             jupiter_executor: JupiterExecutor::new(jupiter_api_key),
-            bundle_manager: JitoBundleManager::new(jito_endpoint),
+            bundle_manager: JitoBundleManager::new(jito_endpoint, rpc_url),
             wallet_manager,
             protocol_registry: ProtocolRegistry::new(),
             min_profit_sol,

@@ -30,6 +30,8 @@ pub mod arbitrage_engine;
 pub mod blocktime;
 pub mod bot_coordinator;
 pub mod database_tracker;
+pub mod dex_parser;
+pub mod token_decimal_cache;
 pub mod dex_registry;
 pub mod dynamic_fee_model;
 pub mod intelligent_failover;
@@ -59,14 +61,18 @@ pub mod metrics_dashboard;
 pub mod shredstream_processor;
 pub mod config_cli;
 pub mod jito_bundle_client;
+pub mod jito_submitter;
 pub mod secure_wallet_manager;
 pub mod production_testing_framework;
 pub mod error_recovery_manager;
 pub mod monitoring_alerting;
+pub mod volume_tracker;
+pub mod realtime_price_monitor;
+// GROK CYCLE 2: Dynamic slippage disabled for MEV speed (user choice)
+// pub mod dynamic_slippage;
 
 // Missing module stubs for compilation
 pub mod missing_modules;
-pub use missing_modules::*;
 
 // Re-export main types for convenience
 pub use jupiter_rate_limiter::{JupiterRateLimiter, RateLimiterStats};
@@ -74,6 +80,8 @@ pub use jupiter_executor::{JupiterExecutor, ExecutionParams, ExecutionResult, cr
 pub use pumpfun_executor::{PumpFunExecutor, PumpFunSwapParams, PumpFunSwapResult, BondingCurveState};
 pub use migration_manager::{MigrationManager, ActivePosition, PositionType, MigrationAlert, AlertType, MigrationStats};
 pub use dynamic_fee_model::{DynamicFeeModel, FeeCalculation, ProfitTier};
+pub use dex_parser::{DexSwapParser, SwapInfo};
+pub use token_decimal_cache::{TokenDecimalCache, calculate_adjusted_price};
 pub use dex_registry::{DexRegistry, DexInfo};
 pub use wallet_manager::{WalletManager, WalletBalanceInfo, TokenBalance};
 pub use transaction_processor::{TransactionProcessor, MevOpportunity, OpportunityType as TxOpportunityType, TransactionInfo, RequiredAction, ActionType};
@@ -103,6 +111,8 @@ pub use shredstream_processor::{ShredStreamProcessor, ShredStreamEvent};
 pub use pumpfun_simd_optimizations::{PumpFunSimdOptimizations, PumpFunInstructionType, PumpFunCreateData, PumpFunBuyData, PumpFunSellData, ParsedBondingCurveState};
 pub use error_recovery_manager::{ErrorRecoveryManager, ErrorType, RetryPolicy, FailureStatistics, CircuitBreakerState, CircuitState, classify_error};
 pub use monitoring_alerting::{MonitoringSystem, SystemMetrics, AlertRule, AlertCondition, AlertSeverity, Alert};
+pub use volume_tracker::{VolumeTracker, SwapRecord};
+pub use realtime_price_monitor::{RealtimePriceMonitor, TokenPrice, run_price_monitoring};
 
 // Re-export ShredStream types
 pub use solana_stream_sdk::{CommitmentLevel, ShredstreamClient};

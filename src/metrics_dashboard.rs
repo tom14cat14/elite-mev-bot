@@ -2,10 +2,9 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::time::interval;
-use tokio::net::TcpStream;
-use tracing::{info, warn, debug};
+use tracing::{info, debug};
 
 /// Real-time metrics dashboard for Elite MEV bot monitoring
 #[derive(Debug)]

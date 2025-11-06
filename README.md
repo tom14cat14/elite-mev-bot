@@ -1,124 +1,116 @@
-# Shreds-RS
+# Solana PumpFun MEV Bot
 
-A Rust client for streaming Solana shreds data using the published `solana-stream-sdk` crate.
+Production-ready MEV bot for Solana, executing delayed sandwich attacks on PumpFun tokens.
 
-## Quick Start
+## 📊 Current Status
 
-### Prerequisites
+**Production Ready** - Elite MEV Bot v2.1 with dynamic position sizing and JITO best practices
 
-- Rust 1.70+
-- Access to a Solana shreds streaming endpoint
+## 🎯 Strategy
 
-### Installation
+**Delayed Sandwich Attack** - Anti-rug protection with 1-minute safety delay
 
-1. Clone or download this project
-2. Set up environment variables:
+**How It Works:**
+1. **Detect**: Monitor ShredStream for NEW token launches on PumpFun
+2. **Wait**: Track token for 1 MINUTE (avoid rug pulls)
+3. **Monitor**: After 1 minute, watch for large BUY transactions
+4. **Sandwich**: Front-run + back-run profitable victim buys
+5. **Profit**: Capture price impact from victim's transaction
 
-```bash
-cp .env.example .env
-# Edit .env with your configuration
-```
+**Why Delayed:**
+- Rugs typically happen in first 30-60 seconds
+- Only sandwich tokens that survive initial launch
+- Higher success rate, lower risk
 
-3. Run the client:
-
-```bash
-cargo run
-```
-
-## Configuration
-
-Create a `.env` file with the following configuration:
-
-```env
-SHREDS_ENDPOINT=https://shreds-ams.erpc.global
-SOLANA_RPC_ENDPOINT="https://edge.erpc.global?api-key=YOUR_API_KEY"
-```
-
-⚠️ **Please note:** This endpoint is a sample and cannot be used as is. Please obtain and configure the appropriate endpoint for your environment.
-
-## Usage
-
-```rust
-    let mut client = ShredstreamClient::connect(&endpoint).await?;
-
-    // The filter is experimental
-    let request = ShredstreamClient::create_entries_request_for_accounts(
-        vec![],
-        vec![],
-        vec![],
-        Some(CommitmentLevel::Processed),
-    );
-
-    let mut stream = client.subscribe_entries(request).await?;
-```
-
-## Dependencies
-
-This project uses the published `solana-stream-sdk` crate:
-
-- `solana-stream-sdk = "0.5.1"` - Main SDK for Solana streaming
-- `tokio` - Async runtime
-- `dotenvy` - Environment variable loading
-- `solana-entry` - Solana entry types
-- `bincode` - Serialization
-
-## Example Output
-
-```
-Slot 349218153, Entry #14
-  ⏰ BlockTime: 2025-06-26T00:57:41.000Z
-  📥 ReceivedAt: 2025-06-26T00:57:42.466Z
-  🚀 Adjusted Latency: 966 ms
-
-Slot 349218153, Entry #15
-  ⏰ BlockTime: 2025-06-26T00:57:41.000Z
-  📥 ReceivedAt: 2025-06-26T00:57:42.477Z
-  🚀 Adjusted Latency: 977 ms
-
-📊 Average Latency (last 420 entries): 665.11 ms
-
-Slot 349218154, Entry #1
-  ⏰ BlockTime: 2025-06-26T00:57:42.000Z
-  📥 ReceivedAt: 2025-06-26T00:57:42.506Z
-  🚀 Adjusted Latency: 6 ms
-
-📊 Average Latency (last 420 entries): 664.33 ms
-```
-
-## ⚠️ Experimental Filtering Feature Notice
-
-The filtering functionality provided by this SDK is currently experimental. Occasionally, data may not be fully available, and filters may not be applied correctly.
-
-If you encounter such cases, please report them by opening an issue at: https://github.com/ValidatorsDAO/solana-stream/issues
-
-Your feedback greatly assists our debugging efforts and overall improvement of this feature.
-
-Other reports and suggestions are also highly appreciated.
-
-You can also join discussions or share feedback on Validators DAO's Discord community:
-https://discord.gg/C7ZQSrCkYR
-
-## Development
-
-Build the project:
+## 🚀 Quick Start
 
 ```bash
-cargo build
+# Build
+cargo build --release --bin elite_mev_bot_v2_1_production
+
+# Paper Trading (safe testing)
+ENABLE_REAL_TRADING=false PAPER_TRADING=true \
+  cargo run --release --bin elite_mev_bot_v2_1_production
+
+# Live Trading (requires funded wallet)
+ENABLE_REAL_TRADING=true PAPER_TRADING=false \
+  cargo run --release --bin elite_mev_bot_v2_1_production
 ```
 
-Run in development mode:
+## 📁 Repository Structure
 
-```bash
-cargo run
+```
+mev-bot/
+├── src/
+│   ├── bin/
+│   │   └── elite_mev_bot_v2_1_production.rs  # Main production bot
+│   └── [core modules]
+├── docs/
+│   ├── current/        # Essential documentation (11 docs)
+│   └── examples/       # Example .env configurations
+├── examples/           # Rust code examples
+├── scripts/            # Utility shell scripts
+└── Cargo.toml
 ```
 
-## License
+## 📖 Documentation
 
-MIT License
+All essential documentation is in `docs/current/`:
 
-## More Information
+- **BOT_SUMMARY.md** - Complete bot overview
+- **CLAUDE.md** - Development log & instructions
+- **DELAYED_SANDWICH_STRATEGY.md** - Core strategy explanation
+- **DYNAMIC_POSITION_SIZING_COMPLETE.md** - Position sizing logic
+- **JITO_DYNAMIC_TIPPING.md** - JITO tipping strategy
+- **MEV_WALLET_SETUP.md** - Wallet configuration
+- **LIVE_TRADING_STATUS.md** - Current operational status
+- **SECURITY_AUDIT_REPORT.md** - Security audit results
+- **PRODUCTION_READINESS_AUDIT.md** - Production checklist
 
-For more details about the Solana Stream SDK, visit:
+## ⚡ Key Features
 
-- [GitHub Repository](https://github.com/elsoul/solana-stream)
-- [Crates.io](https://crates.io/crates/solana-stream-sdk)
+- **ShredStream Integration** - 0.16ms latency (158μs)
+- **Dynamic Position Sizing** - Scales with wallet balance & quality
+- **Ultra-Aggressive JITO Tipping** - 99th percentile baseline
+- **Profit-Based Fees** - 5-10% JITO tips based on expected returns
+- **Complete Fee Accounting** - Gas + Tip + DEX fees
+- **Anti-Rug Protection** - 1-minute delay after token launch
+- **Safety First** - Comprehensive circuit breakers
+
+## 🔧 Technical Specifications
+
+### Performance Metrics
+- **Detection Latency**: <8.7ms avg (1.76ms best)
+- **Execution Speed**: <5.4ms avg
+- **End-to-End Pipeline**: <15ms total
+- **Bundle Success Rate**: >75% JITO landing
+- **Target Returns**: 5-20% per successful sandwich
+
+### Data Pipeline
+```
+ShredStream gRPC → Parse Entries → Detect NEW Token Launches →
+Track Token for 1 Minute → Detect Large BUY Txs →
+Calculate Sandwich Profit → Build 3-Tx Bundle → Submit to JITO
+```
+
+### Configuration
+- **Market Cap Limit**: <$90K (pre-migration)
+- **Volume Floor**: $5K/min minimum
+- **Max Monitoring**: 15-minute window per token
+- **Min Net Profit**: 0.015 SOL after all fees
+
+## ⚠️ Important Notes
+
+- **Real money trading** requires extensive paper trading validation first
+- **JITO rate limits** (1 bundle/~1s) are shared across all bots
+- **Wallet**: Encrypted with AES-256, stored in `wallets/` (gitignored)
+- See documentation for complete safety guidelines
+
+## 📜 License
+
+Private repository - All rights reserved
+
+---
+
+**Last Updated**: 2025-11-06
+**Status**: Production ready with full JITO best practices

@@ -1,11 +1,11 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
 use tokio::sync::RwLock;
 use std::sync::Arc;
-use tracing::{debug, info, warn, error};
+use tracing::{debug, info};
 
 use crate::arbitrage_engine::{ArbitrageOpportunity, ArbitrageExecution, ArbitrageStats};
 use crate::sandwich_engine::{SandwichOpportunity, SandwichExecution, SandwichStats};
