@@ -1,6 +1,6 @@
 # 📚 MEV Bot - Elite MEV Bot v2.1 Production
 
-**GitHub Repository**: https://github.com/tom14cat14/solana-mev-bot
+**GitHub Repository**: https://github.com/tom14cat14/elite-mev-bot
 
 ---
 
