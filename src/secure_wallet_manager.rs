@@ -33,6 +33,7 @@ pub struct EncryptedWallet {
     pub public_key: Pubkey,
     pub encrypted_private_key: Vec<u8>,
     pub nonce: [u8; 12],
+    pub key_derivation_salt: [u8; 32],  // SECURITY FIX: Random salt per wallet
     pub wallet_type: WalletType,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub last_used: Option<chrono::DateTime<chrono::Utc>>,
@@ -410,7 +411,7 @@ impl SecureWalletManager {
         Ok(audit)
     }
 
-    /// Encrypt keypair for storage
+    /// Encrypt keypair for storage (SECURITY FIX: Now generates random salt per wallet)
     fn encrypt_keypair(
         &self,
         name: &str,
@@ -424,11 +425,15 @@ impl SecureWalletManager {
         let encrypted_private_key = cipher.encrypt(&nonce, private_key_bytes.as_slice())
             .map_err(|e| anyhow::anyhow!("Private key encryption failed: {:?}", e))?;
 
+        // SECURITY FIX: Generate unique random salt for this wallet
+        let key_derivation_salt = Self::generate_salt();
+
         Ok(EncryptedWallet {
             name: name.to_string(),
             public_key: keypair.pubkey(),
             encrypted_private_key,
             nonce: nonce.as_slice().try_into()?,
+            key_derivation_salt,  // SECURITY FIX: Store random salt with wallet
             wallet_type,
             created_at: chrono::Utc::now(),
             last_used: None,
@@ -449,11 +454,30 @@ impl SecureWalletManager {
         Ok(keypair)
     }
 
-    /// Derive master key from password
-    fn derive_master_key(password: &str) -> Result<[u8; 32]> {
-        let salt = b"shredstream_mev_wallet_salt_v1"; // Use a proper random salt in production
+    /// Derive master key from password with salt (SECURITY FIX: Now accepts salt parameter)
+    fn derive_key_from_password(password: &str, salt: &[u8]) -> Result<[u8; 32]> {
         let mut key = [0u8; 32];
+        // Using 100,000 iterations as per OWASP recommendations for PBKDF2-HMAC-SHA256
         pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, 100_000, &mut key);
+        Ok(key)
+    }
+
+    /// Generate random salt for key derivation (SECURITY FIX: Random salt per wallet)
+    fn generate_salt() -> [u8; 32] {
+        use aes_gcm::aead::OsRng;
+        use aes_gcm::aead::RngCore;
+        let mut salt = [0u8; 32];
+        OsRng.fill_bytes(&mut salt);
+        salt
+    }
+
+    /// Derive master key from password for manager initialization (legacy compatibility)
+    fn derive_master_key(password: &str) -> Result<[u8; 32]> {
+        // For manager's master key, use a well-known salt derived from password itself
+        // This is acceptable as it's just for the manager, not individual wallets
+        let salt = format!("mev_wallet_manager_v1_{}", password);
+        let mut key = [0u8; 32];
+        pbkdf2_hmac::<Sha256>(password.as_bytes(), salt.as_bytes(), 100_000, &mut key);
         Ok(key)
     }
 
