@@ -29,6 +29,7 @@ pub struct SharedConfig {
 pub mod arbitrage_engine;
 pub mod blocktime;
 pub mod bot_coordinator;
+pub mod constants;  // NEW: Centralized constants module
 pub mod database_tracker;
 pub mod dex_parser;
 pub mod token_decimal_cache;

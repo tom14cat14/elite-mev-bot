@@ -16,10 +16,20 @@ use crate::wallet_manager::WalletManager;
 /// PumpFun program ID for direct bonding curve interactions
 const PUMPFUN_PROGRAM_ID: &str = "PumpFunP4PfMpqd7KsAEL7NKPhpq6M4yDmMRr2tH6gN";
 
+// CONSTANTS: Transaction fee estimates and safety margins
+const ESTIMATED_GAS_LAMPORTS: u64 = 50_000;  // ~0.00005 SOL for transaction fees
+const SAFETY_BUFFER_LAMPORTS: u64 = 5_000_000;  // 0.005 SOL safety reserve for rent + unexpected fees
+const SOL_DECIMALS: u64 = 1_000_000_000;  // 1 SOL = 1 billion lamports
+
+// CONSTANTS: Bonding curve thresholds
+const BONDING_CURVE_MIGRATION_SOL: u64 = 85_000_000_000;  // ~85 SOL triggers migration to Raydium
+const MINIMUM_REAL_RESERVES: u64 = 1_000_000;  // 0.001 SOL minimum to consider active
+
 /// PumpFun bonding curve executor for pre-migration token trading
 pub struct PumpFunExecutor {
     wallet_manager: WalletManager,
     program_id: Pubkey,
+    rpc_client: Option<std::sync::Arc<solana_rpc_client::rpc_client::RpcClient>>,  // SECURITY FIX: For balance validation
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -61,6 +71,22 @@ impl PumpFunExecutor {
         Ok(Self {
             wallet_manager,
             program_id,
+            rpc_client: None,  // No RPC client, balance validation disabled
+        })
+    }
+
+    /// Create executor with RPC client for balance validation (SECURITY FIX)
+    pub fn new_with_rpc(
+        wallet_manager: WalletManager,
+        rpc_client: std::sync::Arc<solana_rpc_client::rpc_client::RpcClient>,
+    ) -> Result<Self> {
+        let program_id = Pubkey::from_str(PUMPFUN_PROGRAM_ID)
+            .map_err(|e| anyhow::anyhow!("Invalid PumpFun program ID: {}", e))?;
+
+        Ok(Self {
+            wallet_manager,
+            program_id,
+            rpc_client: Some(rpc_client),
         })
     }
 
@@ -99,6 +125,52 @@ impl PumpFunExecutor {
         params: PumpFunSwapParams,
     ) -> Result<PumpFunSwapResult> {
         let start_time = Instant::now();
+
+        // SECURITY FIX: Validate wallet balance before attempting trade
+        if let Some(rpc_client) = &self.rpc_client {
+            let wallet_pubkey = self.wallet_manager.get_main_pubkey();
+
+            match rpc_client.get_balance(&wallet_pubkey) {
+                Ok(balance_lamports) => {
+                    // Calculate total required: trade amount + gas fees + safety buffer
+                    let trade_amount_lamports = if params.is_buy {
+                        params.amount_in  // For buy, amount_in is SOL
+                    } else {
+                        0  // For sell, we're selling tokens not SOL
+                    };
+
+                    let total_required = trade_amount_lamports + ESTIMATED_GAS_LAMPORTS + SAFETY_BUFFER_LAMPORTS;
+
+                    if balance_lamports < total_required {
+                        let balance_sol = balance_lamports as f64 / SOL_DECIMALS as f64;
+                        let required_sol = total_required as f64 / SOL_DECIMALS as f64;
+
+                        warn!("Insufficient balance: have {:.6} SOL, need {:.6} SOL", balance_sol, required_sol);
+
+                        return Ok(PumpFunSwapResult {
+                            success: false,
+                            signature: None,
+                            actual_amount_out: None,
+                            execution_time_ms: start_time.elapsed().as_millis() as u64,
+                            error_message: Some(format!(
+                                "Insufficient balance: wallet has {:.6} SOL but trade requires {:.6} SOL (including fees)",
+                                balance_sol, required_sol
+                            )),
+                        });
+                    }
+
+                    debug!("Balance validation passed: {:.6} SOL available, {:.6} SOL required",
+                           balance_lamports as f64 / SOL_DECIMALS as f64,
+                           total_required as f64 / SOL_DECIMALS as f64);
+                }
+                Err(e) => {
+                    warn!("Failed to fetch wallet balance, proceeding without validation: {}", e);
+                    // Continue anyway - balance check is a safety measure, not a hard requirement
+                }
+            }
+        } else {
+            debug!("RPC client not configured, skipping balance validation");
+        }
 
         // Get bonding curve state
         let bonding_curve_state = match self.get_bonding_curve_state(&params.token_mint).await {
@@ -206,13 +278,15 @@ impl PumpFunExecutor {
     /// Calculate token output for SOL input (buy)
     fn calculate_buy_output(&self, state: &BondingCurveState, sol_input: u64) -> Result<u64> {
         // PumpFun bonding curve formula: k = virtual_sol_reserves * virtual_token_reserves
+        // This is a constant product AMM formula (x * y = k)
         let k = state.virtual_sol_reserves * state.virtual_token_reserves;
         let new_sol_reserves = state.virtual_sol_reserves + sol_input;
         let new_token_reserves = k / new_sol_reserves;
         let token_output = state.virtual_token_reserves - new_token_reserves;
 
         debug!("Buy calculation: {} SOL -> {} tokens",
-               sol_input as f64 / 1e9, token_output as f64 / 1e9);
+               sol_input as f64 / SOL_DECIMALS as f64,
+               token_output as f64 / SOL_DECIMALS as f64);
 
         Ok(token_output)
     }
@@ -220,13 +294,15 @@ impl PumpFunExecutor {
     /// Calculate SOL output for token input (sell)
     fn calculate_sell_output(&self, state: &BondingCurveState, token_input: u64) -> Result<u64> {
         // PumpFun bonding curve formula: k = virtual_sol_reserves * virtual_token_reserves
+        // This is a constant product AMM formula (x * y = k)
         let k = state.virtual_sol_reserves * state.virtual_token_reserves;
         let new_token_reserves = state.virtual_token_reserves + token_input;
         let new_sol_reserves = k / new_token_reserves;
         let sol_output = state.virtual_sol_reserves - new_sol_reserves;
 
         debug!("Sell calculation: {} tokens -> {} SOL",
-               token_input as f64 / 1e9, sol_output as f64 / 1e9);
+               token_input as f64 / SOL_DECIMALS as f64,
+               sol_output as f64 / SOL_DECIMALS as f64);
 
         Ok(sol_output)
     }
@@ -294,8 +370,8 @@ impl PumpFunExecutor {
             Ok(state) => {
                 // Check multiple migration indicators
                 let is_migrated = state.complete ||
-                                 state.virtual_sol_reserves >= 85_000_000_000 || // ~85 SOL triggers migration
-                                 state.real_sol_reserves <= 1_000_000; // Very low real reserves
+                                 state.virtual_sol_reserves >= BONDING_CURVE_MIGRATION_SOL ||
+                                 state.real_sol_reserves <= MINIMUM_REAL_RESERVES;
 
                 if is_migrated {
                     info!("🔄 Token {} has migrated: complete={}, virtual_sol={}, real_sol={}",
