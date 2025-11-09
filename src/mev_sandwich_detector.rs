@@ -463,10 +463,6 @@ fn analyze_transaction(
         if let Some(dex_name) = dex_programs.identify(program_id) {
             info!("🔍 Detected {} swap in transaction", dex_name);
 
-            // Filter based on bot mode
-            let enable_bonding_curve = std::env::var("ENABLE_BONDING_CURVE_DIRECT")
-                .unwrap_or_else(|_| "false".to_string()) == "true";
-
             // ⚡ SKIP JUPITER - It's an aggregator (too slow for MEV)
             // Jupiter routes through other DEXs which we already detect directly
             if dex_name == "Jupiter_V6" {
@@ -474,20 +470,9 @@ fn analyze_transaction(
                 continue;
             }
 
-            if enable_bonding_curve {
-                // PUMPFUN MODE: Only detect PumpSwap swaps
-                if dex_name != "PumpSwap" {
-                    info!("⏭️  Skipping {} swap (PumpFun mode - PumpSwap only)", dex_name);
-                    continue;
-                }
-                info!("✅ Found PumpSwap swap - proceeding with analysis");
-            } else {
-                // MULTI-DEX MODE: Skip PumpSwap swaps
-                if dex_name == "PumpSwap" {
-                    info!("⏭️  Skipping PumpSwap swap (Multi-DEX mode)");
-                    continue;
-                }
-            }
+            // ✅ MULTI-MARKET MODE: Detect opportunities across ALL DEXes
+            // PumpSwap (bonding curve) + Multi-DEX (CLMM, CPMM, Orca, Meteora)
+            // JITO rate limits managed via high profit targets
 
             // Parse detailed swap information based on DEX type
             // All parsers use correct Anchor discriminators from IDL/source code
