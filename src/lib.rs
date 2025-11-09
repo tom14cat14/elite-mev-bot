@@ -58,6 +58,8 @@ pub mod meteora_dlmm_swap;
 pub mod pumpswap_state;
 pub mod pumpswap_swap;
 pub mod token_account_manager;
+// Unified DEX pool state router
+pub mod dex_pool_state;
 pub mod route_cache;
 pub mod sandwich_engine;
 pub mod transaction_processor;
@@ -91,6 +93,7 @@ pub mod missing_modules;
 
 // MEV-specific sandwich detection
 pub mod mev_sandwich_detector;
+pub mod mev_database_tracker;
 
 // Re-export main types for convenience
 pub use jupiter_rate_limiter::{JupiterRateLimiter, RateLimiterStats};
@@ -131,6 +134,8 @@ pub use error_recovery_manager::{ErrorRecoveryManager, ErrorType, RetryPolicy, F
 pub use monitoring_alerting::{MonitoringSystem, SystemMetrics, AlertRule, AlertCondition, AlertSeverity, Alert};
 pub use volume_tracker::{VolumeTracker, SwapRecord};
 pub use realtime_price_monitor::{RealtimePriceMonitor, TokenPrice, run_price_monitoring};
+pub use dex_pool_state::{DexPoolState, DexType, fetch_pool_state, fetch_pool_state_by_dex};
+pub use mev_database_tracker::{MevDatabaseTracker, OverallStats, TodayStats};
 
 // Re-export ShredStream types
 pub use solana_stream_sdk::{CommitmentLevel, ShredstreamClient};

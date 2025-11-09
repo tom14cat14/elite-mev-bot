@@ -95,6 +95,9 @@ hex = "0.4"
 base64 = "0.21"
 borsh = "0.10"  # For Borsh serialization (Solana transaction wire format)
 
+# Database
+rusqlite = { version = "0.31", features = ["bundled"] }
+
 # Rate limiting
 governor = "0.6"
 nonzero_ext = "0.3"
