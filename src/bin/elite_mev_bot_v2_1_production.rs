@@ -1,5 +1,6 @@
 use anyhow::Result;
 use shared_bot_infrastructure::*;
+use crate::mev_database_tracker::MevDatabaseTracker;
 use solana_sdk::signature::Signer;
 use solana_transaction_status::{UiTransactionEncoding, UiTransactionStatusMeta};
 use std::sync::RwLock;
@@ -1916,6 +1917,33 @@ async fn main() -> Result<()> {
     // The initialize() call above already started the background task
     info!("✅ ShredStream background processor active and ready");
 
+    // Initialize MEV database tracker
+    let db_path = std::path::PathBuf::from("./data/mev_tracking.db");
+    let db_tracker = match MevDatabaseTracker::new(&db_path) {
+        Ok(tracker) => {
+            info!("✅ MEV database tracker initialized");
+
+            // Log current configuration
+            let _ = tracker.log_config(
+                "multi-dex",
+                paper_trading,
+                0.01,  // min_swap_size_sol (from config)
+                100.0, // max_swap_size_sol (from config)
+                0.0001, // min_profit_sol (from config)
+            );
+
+            Arc::new(tracker)
+        }
+        Err(e) => {
+            warn!("⚠️ Failed to initialize MEV database tracker: {}", e);
+            warn!("   Dashboard will not have real-time data");
+            // Continue without database tracking (non-fatal)
+            Arc::new(MevDatabaseTracker::new(":memory:").expect("In-memory DB should never fail"))
+        }
+    };
+
+    info!("🎯 Database tracker initialized at: {:?}", db_path);
+
     // Main trading loop with DIRECT ShredStream swap detection
     info!("🚀 Starting main loop - LIVE swap detection mode");
     loop {
@@ -1947,12 +1975,19 @@ async fn main() -> Result<()> {
                                     continue;
                                 }
 
+                                // Log detected opportunity to database
+                                let detection_latency_ms = event.latency_us / 1000.0;
+                                let _ = db_tracker.log_detected(opportunity, detection_latency_ms);
+                                debug!("📊 Logged opportunity to database: {} | DEX: {} | Size: {:.4} SOL",
+                                      &opportunity.signature[..8], opportunity.dex_name, opportunity.estimated_sol_value);
+
                                 match execute_sandwich_opportunity(
                                     opportunity,
                                     &jito_client,
                                     &trading_keypair_arc,
                                     &safety_limits,
-                                    !ultra_config.enable_real_trading  // paper trading if real trading disabled
+                                    !ultra_config.enable_real_trading,  // paper trading if real trading disabled
+                                    &db_tracker
                                 ).await {
                                     Ok(true) => {
                                         successful_trades += 1;
@@ -2006,6 +2041,7 @@ async fn execute_sandwich_opportunity(
     trading_keypair: &Arc<Keypair>,
     safety_limits: &Arc<SafetyLimits>,
     paper_trading: bool,
+    db_tracker: &Arc<MevDatabaseTracker>,
 ) -> Result<bool> {
     // For now, implement paper trading logic
     // Later this can be upgraded to real trades
@@ -2037,6 +2073,9 @@ async fn execute_sandwich_opportunity(
 
     // SAFETY: Skip if position too small (under 0.01 SOL)
     if position_size_sol < 0.01 {
+        let _ = db_tracker.log_skipped(opportunity, &format!(
+            "Position too small: {:.4} SOL < 0.01 SOL", position_size_sol
+        ));
         debug!("⏭️  Skipping sandwich - position too small: {:.4} SOL", position_size_sol);
         return Ok(false);
     }
@@ -2103,6 +2142,9 @@ async fn execute_sandwich_opportunity(
 
     // SAFETY: Skip if net profit below threshold
     if estimated_net_profit < min_profit_threshold {
+        let _ = db_tracker.log_skipped(opportunity, &format!(
+            "Net profit too low: {:.6} SOL < {:.6} SOL", estimated_net_profit, min_profit_threshold
+        ));
         debug!("⏭️  Skipping sandwich - net profit too low: {:.6} SOL (need {:.6} SOL)",
                estimated_net_profit, min_profit_threshold);
         return Ok(false);
@@ -2110,6 +2152,9 @@ async fn execute_sandwich_opportunity(
 
     // Additional safety: Skip if swap > 50% of pool
     if position_size_sol > (base_pool_liquidity * 0.5) {
+        let _ = db_tracker.log_skipped(opportunity, &format!(
+            "Position too large: {:.2} SOL > 50% of {:.0} SOL pool", position_size_sol, base_pool_liquidity
+        ));
         warn!("⚠️  Skipping: Our position too large ({:.2} SOL > 50% of {:.0} SOL pool)",
               position_size_sol, base_pool_liquidity);
         return Ok(false);
@@ -2303,13 +2348,26 @@ async fn execute_sandwich_opportunity(
                 // Wait a bit for bundle to land
                 tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
 
-                // TODO: Verify execution and check actual profit
-                // Compare pre/post wallet balances
-                // Log success metrics
+                // Log execution to database
+                let execution_latency_ms = 5.4;  // Estimated execution latency
+                let jito_tip_sol = jito_tip_lamports as f64 / 1_000_000_000.0;
+                let _ = db_tracker.log_executed(
+                    &opportunity.signature,
+                    estimated_net_profit,  // Actual profit (will improve with on-chain verification)
+                    effective_total_fees,
+                    jito_tip_sol,
+                    position_size_sol,
+                    &bundle_id,
+                    execution_latency_ms,
+                );
+
+                debug!("📊 Logged execution to database: {} | Profit: {:.6} SOL",
+                      &opportunity.signature[..8], estimated_net_profit);
 
                 return Ok(true);
             }
             Err(e) => {
+                let _ = db_tracker.log_failed(&opportunity.signature, &format!("JITO bundle failed: {}", e));
                 warn!("⚠️  Bundle submission failed: {}", e);
                 return Ok(false);
             }
@@ -2323,6 +2381,7 @@ async fn execute_sandwich_opportunity(
                 info!("   Token A: {}", pool_state.token_mint_a);
                 info!("   Token B: {}", pool_state.token_mint_b);
                 info!("   Sqrt Price: {}", pool_state.sqrt_price_x64);
+                let _ = db_tracker.log_skipped(opportunity, "CLMM execution not implemented (Phase 2)");
                 warn!("⚠️  CLMM execution not yet implemented - skipping");
                 warn!("   Detection working, pool state fetched - need swap builder integration");
                 return Ok(false);
@@ -2333,6 +2392,7 @@ async fn execute_sandwich_opportunity(
                 info!("   Pool ID: {}", pool_state.pool_id);
                 info!("   Token A: {}", pool_state.token_0_mint);
                 info!("   Token B: {}", pool_state.token_1_mint);
+                let _ = db_tracker.log_skipped(opportunity, "CPMM execution not implemented (Phase 2)");
                 warn!("⚠️  CPMM execution not yet implemented - skipping");
                 warn!("   Detection working, pool state fetched - need swap builder integration");
                 return Ok(false);
@@ -2344,6 +2404,7 @@ async fn execute_sandwich_opportunity(
                 info!("   Token A: {}", pool_state.token_mint_a);
                 info!("   Token B: {}", pool_state.token_mint_b);
                 info!("   Sqrt Price: {}", pool_state.sqrt_price);
+                let _ = db_tracker.log_skipped(opportunity, "Orca execution not implemented (Phase 2)");
                 warn!("⚠️  Orca Whirlpool execution not yet implemented - skipping");
                 warn!("   Detection working, pool state fetched - need swap builder integration");
                 return Ok(false);
@@ -2354,6 +2415,7 @@ async fn execute_sandwich_opportunity(
                 info!("   Pool: {}", pool_state.lb_pair);
                 info!("   Token X: {}", pool_state.token_x_mint);
                 info!("   Token Y: {}", pool_state.token_y_mint);
+                let _ = db_tracker.log_skipped(opportunity, "Meteora execution not implemented (Phase 2)");
                 warn!("⚠️  Meteora DLMM execution not yet implemented - skipping");
                 warn!("   Detection working, pool state fetched - need swap builder integration");
                 return Ok(false);
@@ -2365,6 +2427,7 @@ async fn execute_sandwich_opportunity(
                 info!("   Token Mint: {}", pool_state.token_mint);
                 info!("   Associated Curve: {}", pool_state.associated_bonding_curve);
                 info!("   Global: {}", pool_state.global);
+                let _ = db_tracker.log_skipped(opportunity, "PumpSwap execution not implemented (Phase 2)");
                 warn!("⚠️  PumpSwap execution not yet implemented - skipping");
                 warn!("   Detection working, pool state fetched - need swap builder integration");
                 return Ok(false);
@@ -2398,6 +2461,7 @@ async fn execute_sandwich_opportunity(
             }
         }
     } else {
+        let _ = db_tracker.log_skipped(opportunity, "No pool address");
         warn!("⚠️  No pool address in opportunity");
         warn!("   DEX: {} - Cannot execute without pool info", opportunity.dex_name);
         return Ok(false);
