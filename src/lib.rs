@@ -93,6 +93,7 @@ pub mod missing_modules;
 
 // MEV-specific sandwich detection
 pub mod mev_sandwich_detector;
+pub mod pool_validator;
 pub mod mev_database_tracker;
 
 // Re-export main types for convenience

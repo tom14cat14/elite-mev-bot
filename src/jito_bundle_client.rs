@@ -1,7 +1,8 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::Mutex;  // Use tokio::sync::Mutex for async compatibility
 use reqwest::Client;
 use solana_sdk::{
     transaction::{Transaction, VersionedTransaction},
@@ -53,10 +54,10 @@ pub struct JitoBundleClient {
     auth_keypair: Option<Arc<solana_sdk::signature::Keypair>>, // SECURITY: Use Arc<Keypair> instead of owned Keypair
     tip_accounts: Vec<Pubkey>,
     bundle_timeout: Duration,
-    max_retries: usize,
     metrics: Arc<Mutex<JitoMetrics>>,
     cached_tip_floor: Arc<Mutex<Option<CachedTipFloor>>>, // Cache for 95th percentile dynamic tips
     rpc_client: Option<Arc<RpcClient>>, // For pre/post balance checks
+    last_submission_time: Arc<Mutex<Option<Instant>>>, // For rate limiting (1 bundle/sec)
 }
 
 #[derive(Debug, Clone)]
@@ -152,10 +153,10 @@ impl JitoBundleClient {
             auth_keypair: Some(auth_keypair), // Store Arc<Keypair> securely
             tip_accounts,
             bundle_timeout: Duration::from_secs(60),
-            max_retries: 3,
             metrics: Arc::new(Mutex::new(JitoMetrics::default())),
             cached_tip_floor: Arc::new(Mutex::new(None)), // Initialize empty cache
             rpc_client,
+            last_submission_time: Arc::new(Mutex::new(None)), // Initialize rate limiter
         }
     }
 
@@ -188,33 +189,55 @@ impl JitoBundleClient {
             auth_keypair: auth_keypair.map(Arc::new), // Convert to Arc<Keypair>
             tip_accounts,
             bundle_timeout: Duration::from_secs(60),
-            max_retries: 3,
             metrics: Arc::new(Mutex::new(JitoMetrics::default())),
             cached_tip_floor: Arc::new(Mutex::new(None)), // Initialize empty cache
             rpc_client: None, // No RPC client in legacy constructor
+            last_submission_time: Arc::new(Mutex::new(None)), // Initialize rate limiter
         }
     }
 
-    /// Submit bundle with automatic tip calculation and retry logic
+    /// Submit bundle with automatic tip calculation (NO RETRIES - fresh detections only)
     pub async fn submit_bundle(
         &self,
         transactions: Vec<Transaction>,
         tip_lamports: Option<u64>,
     ) -> Result<String> {
-        self.submit_bundle_with_blockhash(transactions, tip_lamports, None).await
+        self.submit_bundle_with_blockhash(transactions, tip_lamports, None, None, None).await
     }
 
-    /// Submit bundle with explicit blockhash for tip transaction
+    /// Submit bundle with uncle bandit protection (balance verification)
+    pub async fn submit_bundle_verified(
+        &self,
+        transactions: Vec<Transaction>,
+        tip_lamports: Option<u64>,
+        wallet_pubkey: &Pubkey,
+        expected_profit_lamports: i64,
+    ) -> Result<String> {
+        self.submit_bundle_with_blockhash(
+            transactions,
+            tip_lamports,
+            None,
+            Some(wallet_pubkey),
+            Some(expected_profit_lamports),
+        ).await
+    }
+
+    /// Submit bundle with explicit blockhash for tip transaction and optional balance verification
     pub async fn submit_bundle_with_blockhash(
         &self,
         transactions: Vec<Transaction>,
         tip_lamports: Option<u64>,
         blockhash: Option<solana_sdk::hash::Hash>,
+        wallet_pubkey: Option<&Pubkey>,  // For balance verification
+        expected_profit_lamports: Option<i64>,  // For uncle bandit protection
     ) -> Result<String> {
         let start_time = Instant::now();
 
         // Calculate optimal tip if not provided
-        let tip_amount = tip_lamports.unwrap_or_else(|| self.calculate_optimal_tip());
+        let tip_amount = match tip_lamports {
+            Some(tip) => tip,
+            None => self.calculate_optimal_tip().await,
+        };
 
         // Select random tip account for load balancing
         let tip_account = self.tip_accounts[fastrand::usize(..self.tip_accounts.len())];
@@ -270,14 +293,24 @@ impl JitoBundleClient {
         let bundle_id = self.submit_with_retries(&bundle).await?;
 
         // Update metrics
-        if let Ok(mut metrics) = self.metrics.lock() {
+        {
+            let mut metrics = self.metrics.lock().await;
             metrics.bundles_submitted += 1;
             metrics.tip_amounts_paid.push(tip_amount);
         }
 
-        // Note: Bundle monitoring would need to be implemented separately
-        // to avoid cloning the client with non-cloneable Keypair
-        debug!("Bundle monitoring not implemented in this version");
+        // ✅ UNCLE BANDIT PROTECTION: Verify balance change if wallet info provided
+        if let (Some(wallet_pk), Some(expected_profit)) = (wallet_pubkey, expected_profit_lamports) {
+            info!("🛡️  Verifying balance change to detect uncle bandit attacks...");
+            if let Err(e) = self.verify_bundle_execution(wallet_pk, expected_profit, tip_amount).await {
+                warn!("⚠️  Balance verification failed: {}", e);
+                warn!("⚠️  Bundle may have been uncle'd (tip paid but trade didn't execute)");
+                // Don't return error - bundle was submitted successfully
+                // Just log the warning for monitoring
+            }
+        } else {
+            debug!("Balance verification skipped (wallet info not provided)");
+        }
 
         let submission_time = start_time.elapsed().as_millis();
         debug!("Bundle submitted in {}ms: {}", submission_time, bundle_id);
@@ -285,31 +318,36 @@ impl JitoBundleClient {
         Ok(bundle_id)
     }
 
-    /// Submit bundle with retry logic
+    /// Submit bundle ONCE with NO RETRIES (MEV philosophy: only fresh detections)
+    /// If submission fails, we move on to the next opportunity - no time wasted on retries
     async fn submit_with_retries(&self, bundle: &JitoBundle) -> Result<String> {
-        let mut last_error = None;
+        // ⚡ RATE LIMITING: Enforce 1.1 second minimum between submissions
+        // JITO limit is 1 bundle/sec, we use 1.1s for safety margin
+        let rate_limit_duration = Duration::from_millis(1100);
 
-        for attempt in 1..=self.max_retries {
-            match self.submit_bundle_once(bundle).await {
-                Ok(bundle_id) => {
-                    if attempt > 1 {
-                        info!("✅ Bundle submitted successfully on attempt {}", attempt);
-                    }
-                    return Ok(bundle_id);
+        {
+            let mut last_time = self.last_submission_time.lock().await;
+            if let Some(last_instant) = *last_time {
+                let elapsed = last_instant.elapsed();
+                if elapsed < rate_limit_duration {
+                    let sleep_duration = rate_limit_duration - elapsed;
+                    debug!("⏱️  Rate limiting: sleeping {:?} to maintain 1 bundle/1.1s", sleep_duration);
+                    drop(last_time); // Release lock before sleeping
+                    tokio::time::sleep(sleep_duration).await;
+                    // Re-acquire lock to update
+                    let mut last_time = self.last_submission_time.lock().await;
+                    *last_time = Some(Instant::now());
+                } else {
+                    *last_time = Some(Instant::now());
                 }
-                Err(e) => {
-                    warn!("❌ Bundle submission attempt {} failed: {}", attempt, e);
-                    last_error = Some(e);
-
-                    if attempt < self.max_retries {
-                        let delay = Duration::from_millis(100 * attempt as u64);
-                        tokio::time::sleep(delay).await;
-                    }
-                }
+            } else {
+                *last_time = Some(Instant::now());
             }
         }
 
-        Err(last_error.unwrap_or_else(|| anyhow::anyhow!("All bundle submission attempts failed")))
+        // Submit once with NO RETRIES - MEV opportunities are time-sensitive
+        // If it fails, we skip it and move on to the next fresh detection
+        self.submit_bundle_once(bundle).await
     }
 
     /// Single bundle submission attempt
@@ -381,12 +419,11 @@ impl JitoBundleClient {
     }
 
     /// Get cached tip floor data (returns None if cache is empty or expired)
-    pub fn get_cached_tip_floor(&self) -> Option<TipFloorResponse> {
-        if let Ok(cache_guard) = self.cached_tip_floor.lock() {
-            if let Some(cached) = cache_guard.as_ref() {
-                if !cached.is_expired() {
-                    return Some(cached.data.clone());
-                }
+    pub async fn get_cached_tip_floor(&self) -> Option<TipFloorResponse> {
+        let cache_guard = self.cached_tip_floor.lock().await;
+        if let Some(cached) = cache_guard.as_ref() {
+            if !cached.is_expired() {
+                return Some(cached.data.clone());
             }
         }
         None
@@ -417,7 +454,8 @@ impl JitoBundleClient {
                         match response.json::<TipFloorResponse>().await {
                             Ok(tip_floor) => {
                                 // Update cache
-                                if let Ok(mut cache_guard) = cache_clone.lock() {
+                                {
+                                    let mut cache_guard = cache_clone.lock().await;
                                     *cache_guard = Some(CachedTipFloor {
                                         data: tip_floor.clone(),
                                         fetched_at: Instant::now(),
@@ -444,7 +482,8 @@ impl JitoBundleClient {
     /// Fetch tip floor data from JITO API with caching (60 second cache)
     async fn fetch_tip_floor(&self) -> Result<TipFloorResponse> {
         // Check cache first
-        if let Ok(cache_guard) = self.cached_tip_floor.lock() {
+        {
+            let cache_guard = self.cached_tip_floor.lock().await;
             if let Some(cached) = cache_guard.as_ref() {
                 if !cached.is_expired() {
                     debug!("💰 Using cached tip floor (95th: {:.6} SOL)",
@@ -471,7 +510,8 @@ impl JitoBundleClient {
             .map_err(|e| anyhow::anyhow!("Failed to parse tip floor response: {}", e))?;
 
         // Update cache
-        if let Ok(mut cache_guard) = self.cached_tip_floor.lock() {
+        {
+            let mut cache_guard = self.cached_tip_floor.lock().await;
             *cache_guard = Some(CachedTipFloor {
                 data: tip_floor.clone(),
                 fetched_at: Instant::now(),
@@ -486,13 +526,14 @@ impl JitoBundleClient {
     }
 
     /// Calculate optimal tip using JITO's 95th percentile (aggressive MEV strategy)
-    fn calculate_optimal_tip(&self) -> u64 {
+    async fn calculate_optimal_tip(&self) -> u64 {
         // Try to use 95th percentile from JITO API (user requested "95% for mev")
         // This is async, so we'll spawn a task and use fallback immediately
         let cached_tip_floor = self.cached_tip_floor.clone();
 
         // Check if we have cached data
-        if let Ok(cache_guard) = cached_tip_floor.lock() {
+        {
+            let cache_guard = cached_tip_floor.lock().await;
             if let Some(cached) = cache_guard.as_ref() {
                 if !cached.is_expired() {
                     // Use 95th percentile as requested by user
@@ -510,7 +551,8 @@ impl JitoBundleClient {
         let base_tip = 50_000u64; // 0.00005 SOL fallback
 
         // Adjust based on recent success rate and confirmation times
-        let (success_rate_multiplier, latency_multiplier) = if let Ok(metrics) = self.metrics.lock() {
+        let (success_rate_multiplier, latency_multiplier) = {
+            let metrics = self.metrics.lock().await;
             let success_rate_mult = if metrics.bundle_success_rate < 0.5 {
                 3.0 // Triple tip if success rate is low (more competitive)
             } else if metrics.bundle_success_rate > 0.9 {
@@ -528,8 +570,6 @@ impl JitoBundleClient {
             };
 
             (success_rate_mult, latency_mult)
-        } else {
-            (1.5, 1.3) // Default multipliers (more aggressive)
         };
 
         let optimal_tip = (base_tip as f64 * success_rate_multiplier * latency_multiplier) as u64;
@@ -621,18 +661,14 @@ impl JitoBundleClient {
     }
 
     /// Get bundle performance metrics
-    pub fn get_metrics(&self) -> JitoMetrics {
-        self.metrics.lock().unwrap_or_else(|poisoned_guard| {
-            warn!("Mutex poisoned for metrics, returning default");
-            poisoned_guard.into_inner()
-        }).clone()
+    pub async fn get_metrics(&self) -> JitoMetrics {
+        self.metrics.lock().await.clone()
     }
 
     /// Reset metrics
-    pub fn reset_metrics(&self) {
-        if let Ok(mut metrics) = self.metrics.lock() {
-            *metrics = JitoMetrics::default();
-        }
+    pub async fn reset_metrics(&self) {
+        let mut metrics = self.metrics.lock().await;
+        *metrics = JitoMetrics::default();
     }
 
     /// Check if Jito service is available
@@ -657,6 +693,59 @@ impl JitoBundleClient {
         match response {
             Ok(Ok(resp)) => Ok(resp.status().is_success()),
             _ => Ok(false),
+        }
+    }
+
+    /// Check on-chain confirmation of a bundle by verifying transaction signatures
+    /// Returns (confirmed, block_number, actual_signature) if found on-chain
+    pub async fn check_on_chain_confirmation(
+        &self,
+        bundle_id: &str,
+        expected_signatures: &[String],
+    ) -> Result<Option<(bool, u64, String)>> {
+        if let Some(rpc_client) = &self.rpc_client {
+            // Check each transaction signature to see if it landed on-chain
+            for sig_str in expected_signatures {
+                if let Ok(signature) = sig_str.parse::<solana_sdk::signature::Signature>() {
+                    // Query transaction status
+                    match rpc_client.get_signature_status(&signature) {
+                        Ok(Some(status)) => {
+                            // Transaction found on-chain!
+                            // Try to get transaction details (best effort)
+                            let block_num = if let Ok(tx) = rpc_client.get_transaction(
+                                &signature,
+                                solana_transaction_status::UiTransactionEncoding::Json,
+                            ) {
+                                tx.slot
+                            } else {
+                                0  // Unknown block if we can't fetch details
+                            };
+
+                            info!("✅ On-chain confirmation found! Bundle: {} | Tx: {} | Block: {}",
+                                  &bundle_id[..8], &sig_str[..8], block_num);
+
+                            // Check if transaction succeeded (no error)
+                            let success = status.is_ok();
+                            return Ok(Some((success, block_num, sig_str.clone())));
+                        }
+                        Ok(None) => {
+                            // Transaction not found, continue checking others
+                            continue;
+                        }
+                        Err(e) => {
+                            debug!("RPC error checking signature {}: {}", &sig_str[..8], e);
+                            continue;
+                        }
+                    }
+                }
+            }
+
+            // None of the signatures found on-chain
+            debug!("❌ No on-chain confirmation found for bundle: {}", &bundle_id[..8]);
+            Ok(None)
+        } else {
+            warn!("⚠️ No RPC client available for on-chain confirmation");
+            Ok(None)
         }
     }
 

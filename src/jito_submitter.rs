@@ -98,7 +98,7 @@ impl JitoSubmitter {
                 let gas_fees_sol = 0.0001; // 0.0001 SOL estimate for gas
 
                 // Get dynamic tip from JITO API
-                let tip_lamports = if let Some(cached_data) = jito_client.get_cached_tip_floor() {
+                let tip_lamports = if let Some(cached_data) = jito_client.get_cached_tip_floor().await {
                     // ALWAYS use 99th percentile as base
                     let tip_99th_sol = cached_data.landed_tips_99th / 1_000_000_000.0;
                     let base_tip_99_lamports = (cached_data.landed_tips_99th * 1_000_000_000.0) as u64;

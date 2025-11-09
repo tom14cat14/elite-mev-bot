@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS opportunities (
     pool_address TEXT,
     victim_swap_size_sol REAL NOT NULL,
     estimated_profit_sol REAL,
-    status TEXT NOT NULL,  -- detected, executed, skipped, failed
+    status TEXT NOT NULL,  -- detected, submitted, confirmed, skipped, failed
     skip_reason TEXT,  -- Why opportunity was skipped
     slot BIGINT,
 
@@ -21,6 +21,12 @@ CREATE TABLE IF NOT EXISTS opportunities (
     jito_tip_sol REAL,
     position_size_sol REAL,
     bundle_id TEXT,
+
+    -- On-chain confirmation tracking
+    confirmed_on_chain BOOLEAN DEFAULT 0,  -- Whether bundle landed on chain
+    confirmed_at DATETIME,  -- When confirmation detected
+    confirmation_block BIGINT,  -- Block number where confirmed
+    confirmation_signature TEXT,  -- Actual transaction signature on chain
 
     -- Performance metrics
     detection_latency_ms REAL,

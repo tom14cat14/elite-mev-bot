@@ -131,9 +131,16 @@ pub async fn fetch_pool_state(rpc: &RpcClient, pool_addr: &Pubkey) -> Result<Dex
     info!("📦 Fetched pool account | Address: {} | Owner: {} | Size: {} bytes",
           pool_addr, account.owner, account.data.len());
 
+    // CRITICAL FIX: Validate pool account before parsing
+    // Reject token accounts, wallets, etc. (owner must be DEX program + size >200 bytes)
+    if account.data.len() < 200 {
+        warn!("❌ Account too small to be a pool: {} bytes (min 200)", account.data.len());
+        return Err(anyhow!("Account size {} bytes is too small for a pool (min 200 bytes required)", account.data.len()));
+    }
+
     // Determine DEX type from account owner
     let dex_type = DexType::from_owner(&account.owner)
-        .ok_or_else(|| anyhow!("Unknown DEX program owner: {}", account.owner))?;
+        .ok_or_else(|| anyhow!("Unknown DEX program owner: {} (likely a token account or wallet)", account.owner))?;
 
     info!("🔍 Identified DEX type: {:?}", dex_type);
 

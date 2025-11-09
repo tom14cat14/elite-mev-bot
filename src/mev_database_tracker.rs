@@ -81,11 +81,11 @@ impl MevDatabaseTracker {
         Ok(())
     }
 
-    /// Log an executed opportunity
-    pub fn log_executed(
+    /// Log a submitted bundle (sent to JITO, not yet confirmed)
+    pub fn log_submitted(
         &self,
         signature: &str,
-        actual_profit_sol: f64,
+        estimated_profit_sol: f64,
         fees_paid_sol: f64,
         jito_tip_sol: f64,
         position_size_sol: f64,
@@ -98,7 +98,7 @@ impl MevDatabaseTracker {
 
         conn.execute(
             "UPDATE opportunities SET
-                status = 'executed',
+                status = 'submitted',
                 executed_at = ?1,
                 actual_profit_sol = ?2,
                 fees_paid_sol = ?3,
@@ -109,7 +109,7 @@ impl MevDatabaseTracker {
              WHERE signature = ?8",
             params![
                 executed_at,
-                actual_profit_sol,
+                estimated_profit_sol,
                 fees_paid_sol,
                 jito_tip_sol,
                 position_size_sol,
@@ -119,10 +119,66 @@ impl MevDatabaseTracker {
             ],
         )?;
 
-        // Update daily stats
-        self.update_daily_stats_executed(&conn, actual_profit_sol, fees_paid_sol)?;
+        Ok(())
+    }
+
+    /// Log on-chain confirmation of a bundle
+    pub fn log_confirmed(
+        &self,
+        signature: &str,
+        actual_profit_sol: f64,
+        confirmation_block: u64,
+        confirmation_signature: &str,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+
+        let confirmed_at = Utc::now().to_rfc3339();
+
+        conn.execute(
+            "UPDATE opportunities SET
+                status = 'confirmed',
+                confirmed_on_chain = 1,
+                confirmed_at = ?1,
+                confirmation_block = ?2,
+                confirmation_signature = ?3,
+                actual_profit_sol = ?4
+             WHERE signature = ?5",
+            params![
+                confirmed_at,
+                confirmation_block as i64,
+                confirmation_signature,
+                actual_profit_sol,
+                signature,
+            ],
+        )?;
+
+        // Update daily stats for confirmed execution
+        self.update_daily_stats_executed(&conn, actual_profit_sol, 0.0)?;
 
         Ok(())
+    }
+
+    /// Legacy method for backward compatibility (calls log_submitted)
+    #[deprecated(note = "Use log_submitted instead - this marks as submitted, not confirmed")]
+    pub fn log_executed(
+        &self,
+        signature: &str,
+        actual_profit_sol: f64,
+        fees_paid_sol: f64,
+        jito_tip_sol: f64,
+        position_size_sol: f64,
+        bundle_id: &str,
+        execution_latency_ms: f64,
+    ) -> Result<()> {
+        self.log_submitted(
+            signature,
+            actual_profit_sol,
+            fees_paid_sol,
+            jito_tip_sol,
+            position_size_sol,
+            bundle_id,
+            execution_latency_ms,
+        )
     }
 
     /// Log a failed execution

@@ -2022,6 +2022,16 @@ async fn main() -> Result<()> {
                         }
                     }
                     Err(e) => {
+                        // Check if this is a channel closed error (fatal - requires restart)
+                        let error_msg = e.to_string();
+                        if error_msg.contains("channel closed") || error_msg.contains("stream disconnected") {
+                            error!("🛑 FATAL: ShredStream channel closed - exiting for restart");
+                            error!("   Error: {}", e);
+                            error!("   Processed {} cycles before disconnection", total_scans);
+                            return Err(e);  // Exit main loop - supervisor will restart
+                        }
+
+                        // Log non-fatal errors periodically
                         if total_scans % 100 == 0 {
                             warn!("⚠️ ShredStream processing error: {} (cycle {})", e, total_scans);
                         }

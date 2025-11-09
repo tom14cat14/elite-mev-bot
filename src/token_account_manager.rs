@@ -128,19 +128,21 @@ impl TokenAccountManager {
 
         let ata_address = Self::get_ata_address(wallet_pubkey, mint);
 
-        // Create ATA instruction manually
-        // Accounts: [payer, ata, owner, mint, system_program, token_program]
+        // Create ATA instruction using the correct format
+        // The create instruction is idempotent (discriminator: 1 byte = 0x01 for newer versions, or empty for older)
+        // Modern versions use empty data for backwards compatibility
         Instruction {
             program_id: ata_program_id,
             accounts: vec![
-                AccountMeta::new(*wallet_pubkey, true),      // payer (signer)
-                AccountMeta::new(ata_address, false),        // associated token account
-                AccountMeta::new_readonly(*wallet_pubkey, false), // owner
-                AccountMeta::new_readonly(*mint, false),     // mint
-                AccountMeta::new_readonly(system_program::id(), false), // system program
-                AccountMeta::new_readonly(spl_token::id(), false), // token program
+                AccountMeta::new(*wallet_pubkey, true),              // 0: payer (signer, writable)
+                AccountMeta::new(ata_address, false),                // 1: associated token account (writable)
+                AccountMeta::new_readonly(*wallet_pubkey, false),    // 2: owner
+                AccountMeta::new_readonly(*mint, false),             // 3: mint
+                AccountMeta::new_readonly(system_program::id(), false), // 4: system program
+                AccountMeta::new_readonly(spl_token::id(), false),   // 5: token program
             ],
-            data: vec![], // Create ATA instruction has no data
+            // Use instruction discriminator 1 for create_idempotent (modern standard)
+            data: vec![1],
         }
     }
 
