@@ -183,15 +183,9 @@ fn parse_raydium_clmm_swap(
     message: &VersionedMessage,
     instruction: &solana_sdk::instruction::CompiledInstruction,
 ) -> Option<(String, String, String, u64, u64)> {
-    // Raydium CLMM uses Anchor discriminator: sha256("global:swap")[:8]
-    // Discriminator: [0xf8, 0xc6, 0x9e, 0x91, 0xe1, 0x75, 0x87, 0xc8]
+    // Extract pool regardless of swap instruction type (swap, swapV2, swapWithCap, etc.)
 
     if instruction.data.len() < 24 {
-        return None;
-    }
-
-    // Check Anchor discriminator for "swap" instruction
-    if instruction.data[0..8] != [0xf8, 0xc6, 0x9e, 0x91, 0xe1, 0x75, 0x87, 0xc8] {
         return None;
     }
 
@@ -240,16 +234,9 @@ fn parse_raydium_cpmm_swap(
     message: &VersionedMessage,
     instruction: &solana_sdk::instruction::CompiledInstruction,
 ) -> Option<(String, String, String, u64, u64)> {
-    // Raydium CPMM uses Anchor discriminator: sha256("global:swap_base_input")[:8]
-    // For swap_base_input instruction: [0x09, ...] (byte 0 = 0x09)
-    // Note: CPMM has multiple swap variants, we handle swap_base_input here
+    // Extract pool regardless of swap instruction type (swap_base_input, swap_base_output, etc.)
 
     if instruction.data.len() < 24 {
-        return None;
-    }
-
-    // Check for swap_base_input instruction (byte 0 = 0x09)
-    if instruction.data[0] != 0x09 {
         return None;
     }
 
@@ -259,7 +246,8 @@ fn parse_raydium_cpmm_swap(
         return None;
     }
 
-    let pool_address = accounts.get(instruction.accounts[0] as usize)?;
+    // CPMM pool is at account index 4
+    let pool_address = accounts.get(instruction.accounts[4] as usize)?;
     let user_source = accounts.get(instruction.accounts[4] as usize)?;
     let user_dest = accounts.get(instruction.accounts[5] as usize)?;
 
@@ -288,15 +276,9 @@ fn parse_orca_whirlpool_swap(
     message: &VersionedMessage,
     instruction: &solana_sdk::instruction::CompiledInstruction,
 ) -> Option<(String, String, String, u64, u64)> {
-    // Orca Whirlpools uses Anchor discriminator: sha256("global:swap")[:8]
-    // Discriminator: [0xf8, 0xc6, 0x9e, 0x91, 0xe1, 0x75, 0x87, 0xc8]
+    // Extract pool regardless of swap instruction type (swap, swapV2, etc.)
 
     if instruction.data.len() < 24 {
-        return None;
-    }
-
-    // Check Anchor discriminator for "swap" instruction
-    if instruction.data[0..8] != [0xf8, 0xc6, 0x9e, 0x91, 0xe1, 0x75, 0x87, 0xc8] {
         return None;
     }
 
@@ -304,8 +286,8 @@ fn parse_orca_whirlpool_swap(
 
     // Whirlpool account structure:
     // 0: token_program
-    // 1: token_authority
-    // 2: whirlpool
+    // 1: whirlpool (pool address)
+    // 2: token_authority
     // 3: token_owner_account_a
     // 4: token_vault_a
     // 5: token_owner_account_b
@@ -319,7 +301,8 @@ fn parse_orca_whirlpool_swap(
         return None;
     }
 
-    let pool_address = accounts.get(instruction.accounts[2] as usize)?;
+    // Orca Whirlpool pool is at account index 1
+    let pool_address = accounts.get(instruction.accounts[1] as usize)?;
     let user_source = accounts.get(instruction.accounts[3] as usize)?;
     let user_dest = accounts.get(instruction.accounts[5] as usize)?;
 
@@ -348,28 +331,21 @@ fn parse_meteora_dlmm_swap(
     message: &VersionedMessage,
     instruction: &solana_sdk::instruction::CompiledInstruction,
 ) -> Option<(String, String, String, u64, u64)> {
-    // Meteora DLMM uses Anchor discriminator: sha256("global:swap")[:8]
-    // Discriminator: [0xf8, 0xc6, 0x9e, 0x91, 0xe1, 0x75, 0x87, 0xc8]
-    // Note: Meteora also has "swap2" with different discriminator
+    // Extract pool regardless of swap instruction type (swap, swap2, etc.)
 
     if instruction.data.len() < 24 {
-        return None;
-    }
-
-    // Check for standard "swap" instruction
-    if instruction.data[0..8] != [0xf8, 0xc6, 0x9e, 0x91, 0xe1, 0x75, 0x87, 0xc8] {
         return None;
     }
 
     let accounts = message.static_account_keys();
 
     // DLMM typical structure:
-    // 0: lb_pair (pool)
-    // 1: bin_array_bitmap_extension (optional)
+    // 0: user_token_in
+    // 1: user_token_out
     // 2: reserve_x
     // 3: reserve_y
-    // 4: user_token_in
-    // 5: user_token_out
+    // 4: lb_pair (pool address)
+    // 5: bin_array_bitmap_extension (optional)
     // 6: token_x_mint
     // 7: token_y_mint
     // 8: oracle
@@ -379,9 +355,10 @@ fn parse_meteora_dlmm_swap(
         return None;
     }
 
-    let pool_address = accounts.get(instruction.accounts[0] as usize)?;
-    let user_source = accounts.get(instruction.accounts[4] as usize)?;
-    let user_dest = accounts.get(instruction.accounts[5] as usize)?;
+    // Meteora DLMM pool is at account index 4
+    let pool_address = accounts.get(instruction.accounts[4] as usize)?;
+    let user_source = accounts.get(instruction.accounts[0] as usize)?;
+    let user_dest = accounts.get(instruction.accounts[1] as usize)?;
 
     // Parse amounts (8-byte Anchor discriminator + data)
     let amount_in = u64::from_le_bytes([
@@ -489,6 +466,13 @@ fn analyze_transaction(
             // Filter based on bot mode
             let enable_bonding_curve = std::env::var("ENABLE_BONDING_CURVE_DIRECT")
                 .unwrap_or_else(|_| "false".to_string()) == "true";
+
+            // ⚡ SKIP JUPITER - It's an aggregator (too slow for MEV)
+            // Jupiter routes through other DEXs which we already detect directly
+            if dex_name == "Jupiter_V6" {
+                debug!("⏭️  Skipping Jupiter_V6 swap (aggregator - detect direct DEX swaps instead)");
+                continue;
+            }
 
             if enable_bonding_curve {
                 // PUMPFUN MODE: Only detect PumpSwap swaps
