@@ -8,6 +8,7 @@ use solana_sdk::{
     pubkey::Pubkey,
     message::VersionedMessage,
     transaction::VersionedTransaction,
+    system_program,
 };
 use std::str::FromStr;
 use tracing::{debug, info, warn};
@@ -142,6 +143,12 @@ fn parse_raydium_amm_v4_swap(
 
     // Extract key accounts
     let pool_address = accounts.get(instruction.accounts[1] as usize)?;
+
+    // Validate pool address - reject System Program and other invalid addresses
+    if !is_valid_pool_address(pool_address) {
+        return None;
+    }
+
     let user_source = accounts.get(instruction.accounts[9] as usize)?;
     let user_dest = accounts.get(instruction.accounts[10] as usize)?;
 
@@ -179,6 +186,31 @@ fn parse_raydium_amm_v4_swap(
 }
 
 /// Parse Raydium CLMM (Concentrated Liquidity) swap instruction
+/// Validate that a pool address is not a known system/program account
+/// Filters out System Program, Token Program, and other invalid addresses
+fn is_valid_pool_address(address: &Pubkey) -> bool {
+    // Check if it's the system program
+    if address == &system_program::ID {
+        return false;
+    }
+
+    // Check if it's all zeros
+    if address.to_bytes() == [0u8; 32] {
+        return false;
+    }
+
+    // Check against known program addresses that are never pools
+    let addr_str = address.to_string();
+    !matches!(
+        addr_str.as_str(),
+        "11111111111111111111111111111111" // System Program
+        | "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" // Token Program
+        | "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb" // Token 2022 Program
+        | "ComputeBudget111111111111111111111111111111" // Compute Budget
+        | "Vote111111111111111111111111111111111111111" // Vote Program
+    )
+}
+
 fn parse_raydium_clmm_swap(
     message: &VersionedMessage,
     instruction: &solana_sdk::instruction::CompiledInstruction,
@@ -206,6 +238,12 @@ fn parse_raydium_clmm_swap(
     }
 
     let pool_address = accounts.get(instruction.accounts[0] as usize)?;
+
+    // Validate pool address - reject System Program and other invalid addresses
+    if !is_valid_pool_address(pool_address) {
+        return None;
+    }
+
     let user_source = accounts.get(instruction.accounts[4] as usize)?;
     let user_dest = accounts.get(instruction.accounts[5] as usize)?;
 
@@ -248,6 +286,12 @@ fn parse_raydium_cpmm_swap(
 
     // CPMM pool is at account index 4
     let pool_address = accounts.get(instruction.accounts[4] as usize)?;
+
+    // Validate pool address - reject System Program and other invalid addresses
+    if !is_valid_pool_address(pool_address) {
+        return None;
+    }
+
     let user_source = accounts.get(instruction.accounts[4] as usize)?;
     let user_dest = accounts.get(instruction.accounts[5] as usize)?;
 
@@ -303,6 +347,12 @@ fn parse_orca_whirlpool_swap(
 
     // Orca Whirlpool pool is at account index 1
     let pool_address = accounts.get(instruction.accounts[1] as usize)?;
+
+    // Validate pool address - reject System Program and other invalid addresses
+    if !is_valid_pool_address(pool_address) {
+        return None;
+    }
+
     let user_source = accounts.get(instruction.accounts[3] as usize)?;
     let user_dest = accounts.get(instruction.accounts[5] as usize)?;
 
@@ -357,6 +407,12 @@ fn parse_meteora_dlmm_swap(
 
     // Meteora DLMM pool is at account index 4
     let pool_address = accounts.get(instruction.accounts[4] as usize)?;
+
+    // Validate pool address - reject System Program and other invalid addresses
+    if !is_valid_pool_address(pool_address) {
+        return None;
+    }
+
     let user_source = accounts.get(instruction.accounts[0] as usize)?;
     let user_dest = accounts.get(instruction.accounts[1] as usize)?;
 
