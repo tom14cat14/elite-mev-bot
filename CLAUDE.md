@@ -185,9 +185,9 @@ mev-bot/
 ## ⚠️ IMPORTANT
 
 - **Real money trading** requires extensive paper trading validation first
-- **JITO rate limits** (1 bundle/~1s) are shared across all bots
+- **JITO rate limits** (1 bundle/~1s): Managed via high profit targets to reduce submission volume
 - **Wallet encryption**: AES-256, stored in `wallets/` directory
-- **Don't run multiple bots** simultaneously (shared JITO limits)
+- **Multi-market coverage**: Bot can detect both PumpFun and Multi-DEX opportunities simultaneously
 - See documentation in `docs/current/` for complete details
 
 ---
