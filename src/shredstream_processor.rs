@@ -2,7 +2,7 @@ use anyhow::Result;
 use bytes::BytesMut;
 use futures::StreamExt;
 use solana_entry::entry::Entry;
-use solana_stream_sdk::{CommitmentLevel, ShredstreamClient};
+use solana_stream_sdk::ShredstreamClient;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
@@ -66,70 +66,39 @@ impl ShredStreamProcessor {
         info!("✅ CHECKPOINT 3: ShredStream client connection successful");
         info!("✅ Persistent ShredStream gRPC connection established");
 
-        // Check if we're running PumpFun-only mode (pre-migration) or multi-DEX mode
-        println!("✅ CHECKPOINT 4: Checking bot mode (PumpFun vs Multi-DEX)");
-        eprintln!("✅ CHECKPOINT 4: Checking bot mode (PumpFun vs Multi-DEX)");
-        let enable_bonding_curve = std::env::var("ENABLE_BONDING_CURVE_DIRECT")
-            .unwrap_or_else(|_| "false".to_string()) == "true";
+        // 🔧 CRITICAL FIX: Account-based filtering is unreliable with ERPC ShredStream
+        // Instead, subscribe to ALL entries and filter locally in detect_sandwich_opportunities()
+        // This is the same approach used by the working ORE bot implementation
+        println!("✅ CHECKPOINT 4: Creating unfiltered subscription (ERPC ShredStream fix)");
+        eprintln!("✅ CHECKPOINT 4: Creating unfiltered subscription (ERPC ShredStream fix)");
+        info!("📡 Subscribing to ALL ShredStream entries (local DEX filtering)");
+        info!("🔍 Reason: Account-based filtering unreliable with ERPC ShredStream");
 
-        let dex_program_ids = if enable_bonding_curve {
-            // PUMPFUN MODE: Only subscribe to PumpSwap (pre-migration tokens <$90K)
-            println!("✅ CHECKPOINT 5: PUMPFUN MODE selected");
-            eprintln!("✅ CHECKPOINT 5: PUMPFUN MODE selected");
-            info!("🎯 PUMPFUN MODE: Subscribing to PumpSwap only (pre-migration)");
-            vec![
-                "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P".to_string(), // PumpSwap ONLY
-            ]
-        } else {
-            // MULTI-DEX MODE: Subscribe to all DEXs EXCEPT PumpSwap (post-migration)
-            println!("✅ CHECKPOINT 5: MULTI-DEX MODE selected");
-            eprintln!("✅ CHECKPOINT 5: MULTI-DEX MODE selected");
-            info!("🎯 MULTI-DEX MODE: Subscribing to all DEXs (post-migration)");
-            vec![
-                "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8".to_string(), // Raydium AMM V4
-                "CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK".to_string(), // Raydium CLMM
-                "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C".to_string(), // Raydium CPMM
-                "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc".to_string(), // Orca Whirlpools
-                "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo".to_string(), // Meteora DLMM
-                "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4".to_string(), // Jupiter V6
-            ]
-        };
+        // Subscribe to ALL entries (no account filtering)
+        println!("✅ CHECKPOINT 5: Creating subscription request");
+        eprintln!("✅ CHECKPOINT 5: Creating subscription request");
+        info!("🔍 DEBUG: Creating unfiltered subscription request");
+        let request = ShredstreamClient::create_empty_entries_request();
 
-        println!("✅ CHECKPOINT 6: DEX program IDs created (count: {})", dex_program_ids.len());
-        eprintln!("✅ CHECKPOINT 6: DEX program IDs created (count: {})", dex_program_ids.len());
-        info!("📡 Subscribing to {} DEX program(s) for swap detection", dex_program_ids.len());
-        info!("🔍 DEBUG: DEX program IDs: {:?}", dex_program_ids);
-
-        // Create subscription for transactions involving any DEX program
-        println!("✅ CHECKPOINT 7: Creating subscription request");
-        eprintln!("✅ CHECKPOINT 7: Creating subscription request");
-        info!("🔍 DEBUG: Creating subscription request");
-        let request = ShredstreamClient::create_entries_request_for_accounts(
-            dex_program_ids.clone(),          // DEX program IDs (subscribe to all swaps)
-            vec![],                           // owner addresses (empty)
-            vec![],                           // transaction accounts (empty)
-            Some(CommitmentLevel::Processed), // commitment level
-        );
-
-        println!("✅ CHECKPOINT 8: About to subscribe to entries stream");
-        eprintln!("✅ CHECKPOINT 8: About to subscribe to entries stream");
+        println!("✅ CHECKPOINT 6: About to subscribe to entries stream");
+        eprintln!("✅ CHECKPOINT 6: About to subscribe to entries stream");
         info!("🔍 DEBUG: Subscribing to entries stream");
         let mut stream = client.subscribe_entries(request).await?;
-        println!("✅ CHECKPOINT 9: Subscription successful!");
-        eprintln!("✅ CHECKPOINT 9: Subscription successful!");
+        println!("✅ CHECKPOINT 7: Subscription successful!");
+        eprintln!("✅ CHECKPOINT 7: Subscription successful!");
         info!("🔍 DEBUG: Subscription successful");
-        info!("📡 Subscribed to ShredStream for DEX swaps ({} DEX programs)", dex_program_ids.len());
+        info!("📡 Subscribed to ShredStream for ALL entries (local DEX filtering)");
 
         // Start background task to continuously stream data
-        println!("✅ CHECKPOINT 10: About to spawn background task");
-        eprintln!("✅ CHECKPOINT 10: About to spawn background task");
+        println!("✅ CHECKPOINT 8: About to spawn background task");
+        eprintln!("✅ CHECKPOINT 8: About to spawn background task");
         info!("🔍 DEBUG: About to spawn background task");
         let stream_data = self.stream_data.clone();
         tokio::spawn(async move {
             let mut entries_processed = 0u64;
 
-            println!("✅ CHECKPOINT 11: Background task started!");
-            eprintln!("✅ CHECKPOINT 11: Background task started!");
+            println!("✅ CHECKPOINT 9: Background task started!");
+            eprintln!("✅ CHECKPOINT 9: Background task started!");
             info!("🚀 Background ShredStream processor started");
             info!("🔍 DEBUG: Background task is now running");
 
@@ -184,16 +153,16 @@ impl ShredStreamProcessor {
             warn!("🛑 ShredStream background processor ended");
         });
 
-        println!("✅ CHECKPOINT 12: Background task spawned successfully");
-        eprintln!("✅ CHECKPOINT 12: Background task spawned successfully");
+        println!("✅ CHECKPOINT 10: Background task spawned successfully");
+        eprintln!("✅ CHECKPOINT 10: Background task spawned successfully");
         info!("🔍 DEBUG: Background task spawned successfully");
         self.initialized = true;
-        println!("✅ CHECKPOINT 13: self.initialized set to true");
-        eprintln!("✅ CHECKPOINT 13: self.initialized set to true");
+        println!("✅ CHECKPOINT 11: self.initialized set to true");
+        eprintln!("✅ CHECKPOINT 11: self.initialized set to true");
         info!("🔍 DEBUG: self.initialized set to true");
-        println!("✅✅✅ CHECKPOINT 14: initialize() COMPLETED SUCCESSFULLY!");
-        eprintln!("✅✅✅ CHECKPOINT 14: initialize() COMPLETED SUCCESSFULLY!");
-        info!("✅✅✅ CHECKPOINT 14: initialize() COMPLETED SUCCESSFULLY!");
+        println!("✅✅✅ CHECKPOINT 12: initialize() COMPLETED SUCCESSFULLY!");
+        eprintln!("✅✅✅ CHECKPOINT 12: initialize() COMPLETED SUCCESSFULLY!");
+        info!("✅✅✅ CHECKPOINT 12: initialize() COMPLETED SUCCESSFULLY!");
         Ok(())
     }
 
