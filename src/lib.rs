@@ -44,6 +44,20 @@ pub mod mempool_monitor;
 pub mod microcap_filter;
 pub mod migration_manager;
 pub mod pumpfun_executor;
+pub mod raydium_swap_builder;
+pub mod raydium_pool_state;
+// Multi-DEX support modules (Raydium CLMM, CPMM, Orca, Meteora, PumpSwap)
+pub mod raydium_clmm_state;
+pub mod raydium_clmm_swap;
+pub mod raydium_cpmm_state;
+pub mod raydium_cpmm_swap;
+pub mod orca_whirlpool_state;
+pub mod orca_whirlpool_swap;
+pub mod meteora_dlmm_state;
+pub mod meteora_dlmm_swap;
+pub mod pumpswap_state;
+pub mod pumpswap_swap;
+pub mod token_account_manager;
 pub mod route_cache;
 pub mod sandwich_engine;
 pub mod transaction_processor;
@@ -74,6 +88,9 @@ pub mod realtime_price_monitor;
 
 // Missing module stubs for compilation
 pub mod missing_modules;
+
+// MEV-specific sandwich detection
+pub mod mev_sandwich_detector;
 
 // Re-export main types for convenience
 pub use jupiter_rate_limiter::{JupiterRateLimiter, RateLimiterStats};
