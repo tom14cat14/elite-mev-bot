@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
 use tracing::{info, warn, debug};
+use crate::mev_sandwich_detector::{detect_sandwich_opportunities, SandwichConfig};
 
 pub struct ShredStreamProcessor {
     pub endpoint: String,
@@ -20,6 +21,7 @@ pub struct ShredStreamEvent {
     pub opportunity_count: u64,
     pub latency_us: f64,
     pub data_size_bytes: usize,
+    pub sandwich_opportunities: Vec<crate::mev_sandwich_detector::SandwichOpportunity>,
 }
 
 impl ShredStreamProcessor {
@@ -34,43 +36,125 @@ impl ShredStreamProcessor {
 
     /// Initialize persistent gRPC-over-HTTPS connection and start background streaming
     pub async fn initialize(&mut self) -> Result<()> {
+        println!("🔥🔥🔥 SHREDSTREAM_PROCESSOR: initialize() ENTRY POINT");
+        eprintln!("🔥🔥🔥 SHREDSTREAM_PROCESSOR: initialize() ENTRY POINT");
+        info!("🔥🔥🔥 DEBUG: Entered initialize() function");
+        info!("🔥 DEBUG: self.initialized = {}", self.initialized);
+
         if self.initialized {
+            println!("⏭️  EARLY RETURN: Already initialized");
+            eprintln!("⏭️  EARLY RETURN: Already initialized");
+            info!("⏭️  EARLY RETURN: Already initialized");
             return Ok(());
         }
 
+        println!("✅ CHECKPOINT 1: Passed self.initialized check");
+        eprintln!("✅ CHECKPOINT 1: Passed self.initialized check");
+        info!("✅ CHECKPOINT 1: Passed self.initialized check");
         info!("🔌 Initializing gRPC ShredStream connection: {}", self.endpoint);
 
         // Connect to ShredStream via gRPC-over-HTTPS
+        println!("✅ CHECKPOINT 2: About to connect to ShredStream at: {}", self.endpoint);
+        eprintln!("✅ CHECKPOINT 2: About to connect to ShredStream at: {}", self.endpoint);
+        info!("✅ CHECKPOINT 2: About to connect to ShredStream at: {}", self.endpoint);
+
         let mut client = ShredstreamClient::connect(&self.endpoint).await
             .map_err(|e| anyhow::anyhow!("ShredStream gRPC connection failed (check IP whitelist): {}", e))?;
 
+        println!("✅ CHECKPOINT 3: ShredStream client connection successful");
+        eprintln!("✅ CHECKPOINT 3: ShredStream client connection successful");
+        info!("✅ CHECKPOINT 3: ShredStream client connection successful");
         info!("✅ Persistent ShredStream gRPC connection established");
 
-        // Create subscription for ALL transactions (no filter for maximum speed)
+        // Check if we're running PumpFun-only mode (pre-migration) or multi-DEX mode
+        println!("✅ CHECKPOINT 4: Checking bot mode (PumpFun vs Multi-DEX)");
+        eprintln!("✅ CHECKPOINT 4: Checking bot mode (PumpFun vs Multi-DEX)");
+        let enable_bonding_curve = std::env::var("ENABLE_BONDING_CURVE_DIRECT")
+            .unwrap_or_else(|_| "false".to_string()) == "true";
+
+        let dex_program_ids = if enable_bonding_curve {
+            // PUMPFUN MODE: Only subscribe to PumpSwap (pre-migration tokens <$90K)
+            println!("✅ CHECKPOINT 5: PUMPFUN MODE selected");
+            eprintln!("✅ CHECKPOINT 5: PUMPFUN MODE selected");
+            info!("🎯 PUMPFUN MODE: Subscribing to PumpSwap only (pre-migration)");
+            vec![
+                "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P".to_string(), // PumpSwap ONLY
+            ]
+        } else {
+            // MULTI-DEX MODE: Subscribe to all DEXs EXCEPT PumpSwap (post-migration)
+            println!("✅ CHECKPOINT 5: MULTI-DEX MODE selected");
+            eprintln!("✅ CHECKPOINT 5: MULTI-DEX MODE selected");
+            info!("🎯 MULTI-DEX MODE: Subscribing to all DEXs (post-migration)");
+            vec![
+                "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8".to_string(), // Raydium AMM V4
+                "CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK".to_string(), // Raydium CLMM
+                "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C".to_string(), // Raydium CPMM
+                "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc".to_string(), // Orca Whirlpools
+                "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo".to_string(), // Meteora DLMM
+                "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4".to_string(), // Jupiter V6
+            ]
+        };
+
+        println!("✅ CHECKPOINT 6: DEX program IDs created (count: {})", dex_program_ids.len());
+        eprintln!("✅ CHECKPOINT 6: DEX program IDs created (count: {})", dex_program_ids.len());
+        info!("📡 Subscribing to {} DEX program(s) for swap detection", dex_program_ids.len());
+        info!("🔍 DEBUG: DEX program IDs: {:?}", dex_program_ids);
+
+        // Create subscription for transactions involving any DEX program
+        println!("✅ CHECKPOINT 7: Creating subscription request");
+        eprintln!("✅ CHECKPOINT 7: Creating subscription request");
+        info!("🔍 DEBUG: Creating subscription request");
         let request = ShredstreamClient::create_entries_request_for_accounts(
-            vec![],                           // accounts (empty = all)
-            vec![],                           // owner addresses (empty = all)
-            vec![],                           // transaction accounts (empty = all)
+            dex_program_ids.clone(),          // DEX program IDs (subscribe to all swaps)
+            vec![],                           // owner addresses (empty)
+            vec![],                           // transaction accounts (empty)
             Some(CommitmentLevel::Processed), // commitment level
         );
 
+        println!("✅ CHECKPOINT 8: About to subscribe to entries stream");
+        eprintln!("✅ CHECKPOINT 8: About to subscribe to entries stream");
+        info!("🔍 DEBUG: Subscribing to entries stream");
         let mut stream = client.subscribe_entries(request).await?;
-        info!("📡 Subscribed to ShredStream entries (all transactions)");
+        println!("✅ CHECKPOINT 9: Subscription successful!");
+        eprintln!("✅ CHECKPOINT 9: Subscription successful!");
+        info!("🔍 DEBUG: Subscription successful");
+        info!("📡 Subscribed to ShredStream for DEX swaps ({} DEX programs)", dex_program_ids.len());
 
         // Start background task to continuously stream data
+        println!("✅ CHECKPOINT 10: About to spawn background task");
+        eprintln!("✅ CHECKPOINT 10: About to spawn background task");
+        info!("🔍 DEBUG: About to spawn background task");
         let stream_data = self.stream_data.clone();
         tokio::spawn(async move {
             let mut entries_processed = 0u64;
 
+            println!("✅ CHECKPOINT 11: Background task started!");
+            eprintln!("✅ CHECKPOINT 11: Background task started!");
             info!("🚀 Background ShredStream processor started");
+            info!("🔍 DEBUG: Background task is now running");
 
+            let mut loop_count = 0u64;
             while let Some(slot_entry_result) = stream.next().await {
+                loop_count += 1;
+                if loop_count % 100 == 0 {
+                    println!("📦 Background task loop iteration: {}", loop_count);
+                    eprintln!("📦 Background task loop iteration: {}", loop_count);
+                    info!("📦 Background task loop iteration: {}", loop_count);
+                }
+
                 match slot_entry_result {
                     Ok(slot_entry) => {
+                        println!("✅ Received slot entry from ShredStream (entries_processed: {})", entries_processed);
+                        eprintln!("✅ Received slot entry from ShredStream (entries_processed: {})", entries_processed);
+                        info!("✅ Received slot entry from ShredStream (entries_processed: {})", entries_processed);
+
                         // Deserialize entries from binary data
                         match bincode::deserialize::<Vec<Entry>>(&slot_entry.entries) {
                             Ok(entries) => {
                                 entries_processed += entries.len() as u64;
+                                println!("✅ Deserialized {} entries (total processed: {})", entries.len(), entries_processed);
+                                eprintln!("✅ Deserialized {} entries (total processed: {})", entries.len(), entries_processed);
+                                info!("✅ Deserialized {} entries (total processed: {})", entries.len(), entries_processed);
 
                                 // Update shared buffer with latest entries
                                 {
@@ -83,11 +167,15 @@ impl ShredStreamProcessor {
                                 }
                             }
                             Err(e) => {
+                                println!("⚠️ Failed to deserialize entries: {}", e);
+                                eprintln!("⚠️ Failed to deserialize entries: {}", e);
                                 warn!("⚠️ Failed to deserialize entries: {}", e);
                             }
                         }
                     }
                     Err(e) => {
+                        println!("⚠️ ShredStream error: {}", e);
+                        eprintln!("⚠️ ShredStream error: {}", e);
                         warn!("⚠️ ShredStream error: {}", e);
                     }
                 }
@@ -96,7 +184,16 @@ impl ShredStreamProcessor {
             warn!("🛑 ShredStream background processor ended");
         });
 
+        println!("✅ CHECKPOINT 12: Background task spawned successfully");
+        eprintln!("✅ CHECKPOINT 12: Background task spawned successfully");
+        info!("🔍 DEBUG: Background task spawned successfully");
         self.initialized = true;
+        println!("✅ CHECKPOINT 13: self.initialized set to true");
+        eprintln!("✅ CHECKPOINT 13: self.initialized set to true");
+        info!("🔍 DEBUG: self.initialized set to true");
+        println!("✅✅✅ CHECKPOINT 14: initialize() COMPLETED SUCCESSFULLY!");
+        eprintln!("✅✅✅ CHECKPOINT 14: initialize() COMPLETED SUCCESSFULLY!");
+        info!("✅✅✅ CHECKPOINT 14: initialize() COMPLETED SUCCESSFULLY!");
         Ok(())
     }
 
@@ -122,6 +219,19 @@ impl ShredStreamProcessor {
             let mut opportunities = 0u64;
             let mut total_bytes = 0usize;
 
+            // MEV SANDWICH DETECTION - Detect victim swaps
+            let sandwich_config = SandwichConfig::default();
+            let sandwich_opps = detect_sandwich_opportunities(&entries, &sandwich_config);
+
+            if !sandwich_opps.is_empty() {
+                info!("🎯 SANDWICH OPPORTUNITIES DETECTED: {}", sandwich_opps.len());
+                for opp in &sandwich_opps {
+                    info!("  💰 {} swap: {:.4} SOL on {} (sig: {})",
+                          opp.dex_name, opp.estimated_sol_value, opp.dex_name, &opp.signature[..20]);
+                }
+                opportunities += sandwich_opps.len() as u64;
+            }
+
             // Process entries for opportunities
             for entry in &entries {
                 for tx in &entry.transactions {
@@ -145,6 +255,7 @@ impl ShredStreamProcessor {
                 opportunity_count: opportunities,
                 latency_us,
                 data_size_bytes: total_bytes,
+                sandwich_opportunities: sandwich_opps,
             })
         } else {
             // No new data available, return immediately with zero count
@@ -152,6 +263,7 @@ impl ShredStreamProcessor {
                 opportunity_count: 0,
                 latency_us: start.elapsed().as_micros() as f64,
                 data_size_bytes: 0,
+                sandwich_opportunities: Vec::new(),
             })
         }
     }

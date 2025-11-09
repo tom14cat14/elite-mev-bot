@@ -465,9 +465,15 @@ impl SecureWalletManager {
     /// Generate random salt for key derivation (SECURITY FIX: Random salt per wallet)
     fn generate_salt() -> [u8; 32] {
         use aes_gcm::aead::OsRng;
-        use aes_gcm::aead::RngCore;
+        // Generate 32 bytes of random salt using AES-GCM nonce generation (12 bytes) + additional entropy
+        let nonce1 = Aes256Gcm::generate_nonce(&mut OsRng);
+        let nonce2 = Aes256Gcm::generate_nonce(&mut OsRng);
+        let nonce3 = Aes256Gcm::generate_nonce(&mut OsRng);
+
         let mut salt = [0u8; 32];
-        OsRng.fill_bytes(&mut salt);
+        salt[0..12].copy_from_slice(&nonce1);
+        salt[12..24].copy_from_slice(&nonce2);
+        salt[24..32].copy_from_slice(&nonce3[0..8]);
         salt
     }
 
