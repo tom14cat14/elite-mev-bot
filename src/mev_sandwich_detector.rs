@@ -21,7 +21,8 @@ pub struct DexPrograms {
     pub orca_whirlpools: Pubkey,
     pub meteora_dlmm: Pubkey,
     pub jupiter_v6: Pubkey,
-    pub pumpswap: Pubkey,
+    pub pumpfun_bonding_curve: Pubkey,  // Pre-migration bonding curve (was mislabeled "pumpswap")
+    pub pumpswap_dex: Pubkey,            // Post-migration DEX (NEW - launched March 2025)
 }
 
 impl DexPrograms {
@@ -33,7 +34,8 @@ impl DexPrograms {
             orca_whirlpools: Pubkey::from_str("whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc").unwrap(),
             meteora_dlmm: Pubkey::from_str("LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo").unwrap(),
             jupiter_v6: Pubkey::from_str("JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4").unwrap(),
-            pumpswap: Pubkey::from_str("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P").unwrap(),
+            pumpfun_bonding_curve: Pubkey::from_str("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P").unwrap(),
+            pumpswap_dex: Pubkey::from_str("pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA").unwrap(),
         }
     }
 
@@ -50,8 +52,10 @@ impl DexPrograms {
             Some("Meteora_DLMM")
         } else if program_id == &self.jupiter_v6 {
             Some("Jupiter_V6")
-        } else if program_id == &self.pumpswap {
-            Some("PumpSwap")
+        } else if program_id == &self.pumpfun_bonding_curve {
+            Some("PumpFun_BondingCurve")
+        } else if program_id == &self.pumpswap_dex {
+            Some("PumpSwap_DEX")
         } else {
             None
         }
@@ -485,17 +489,17 @@ fn parse_meteora_dlmm_swap(
     ))
 }
 
-/// Parse PumpSwap bonding curve swap
-fn parse_pumpswap_swap(
+/// Parse PumpFun bonding curve swap (pre-migration)
+fn parse_pumpfun_bonding_curve_swap(
     message: &VersionedMessage,
     instruction: &solana_sdk::instruction::CompiledInstruction,
 ) -> Option<(String, String, String, u64, u64)> {
-    // PumpSwap has two swap instructions:
+    // PumpFun bonding curve has two swap instructions:
     // Buy:  [102, 6, 61, 18, 1, 218, 235, 234]
     // Sell: [51, 230, 133, 164, 1, 127, 131, 173]
 
     if instruction.data.len() < 24 {
-        warn!("⚠️  PumpSwap Parse REJECTED: instruction.data.len()={} < 24 required", instruction.data.len());
+        warn!("⚠️  PumpFun Parse REJECTED: instruction.data.len()={} < 24 required", instruction.data.len());
         return None;
     }
 
@@ -504,13 +508,13 @@ fn parse_pumpswap_swap(
     let is_sell = instruction.data[0..8] == [51, 230, 133, 164, 1, 127, 131, 173];
 
     if !is_buy && !is_sell {
-        warn!("⚠️  PumpSwap Parse REJECTED: Unknown discriminator {:?}", &instruction.data[0..8]);
+        warn!("⚠️  PumpFun Parse REJECTED: Unknown discriminator {:?}", &instruction.data[0..8]);
         return None;
     }
 
     let accounts = message.static_account_keys();
 
-    // PumpSwap structure:
+    // PumpFun bonding curve structure:
     // 0: global
     // 1: fee_recipient
     // 2: mint
@@ -525,21 +529,21 @@ fn parse_pumpswap_swap(
     // 11: program
 
     if instruction.accounts.len() < 7 {
-        warn!("⚠️  PumpSwap Parse REJECTED: instruction.accounts.len()={} < 7 required", instruction.accounts.len());
+        warn!("⚠️  PumpFun Parse REJECTED: instruction.accounts.len()={} < 7 required", instruction.accounts.len());
         return None;
     }
 
-    info!("🔍 PumpSwap Parse | is_buy={} | is_sell={} | ix.accounts.len()={} | accounts.len()={}",
+    info!("🔍 PumpFun Parse | is_buy={} | is_sell={} | ix.accounts.len()={} | accounts.len()={}",
           is_buy, is_sell, instruction.accounts.len(), accounts.len());
 
     let bonding_curve = accounts.get(instruction.accounts[3] as usize)?;
 
-    info!("✅ EXTRACTED POOL: {} | DEX: PumpSwap | From ix accounts[3] (bonding curve)", bonding_curve);
+    info!("✅ EXTRACTED POOL: {} | DEX: PumpFun_BondingCurve | From ix accounts[3] (bonding curve)", bonding_curve);
 
     let user_source = accounts.get(instruction.accounts[5] as usize)?; // associated_user
     let user_dest = accounts.get(instruction.accounts[4] as usize)?;   // associated_bonding_curve
 
-    // PumpSwap uses simpler 8-byte discriminator
+    // PumpFun uses simpler 8-byte discriminator
     let amount_in = u64::from_le_bytes([
         instruction.data[8], instruction.data[9], instruction.data[10], instruction.data[11],
         instruction.data[12], instruction.data[13], instruction.data[14], instruction.data[15],
@@ -552,6 +556,67 @@ fn parse_pumpswap_swap(
 
     Some((
         bonding_curve.to_string(),
+        user_source.to_string(),
+        user_dest.to_string(),
+        amount_in,
+        min_amount_out,
+    ))
+}
+
+/// Parse PumpSwap DEX swap (post-migration)
+/// Grok-verified implementation for post-bonding curve trading
+fn parse_pumpswap_dex_swap(
+    message: &VersionedMessage,
+    instruction: &solana_sdk::instruction::CompiledInstruction,
+) -> Option<(String, String, String, u64, u64)> {
+    // PumpSwap DEX discriminators (Grok-verified):
+    // Buy (SOL → Token): [0x42, 0x3f, 0xa1, 0x12, 0x00, 0x00, 0x00, 0x00]
+    // Sell (Token → SOL): [0x42, 0x3f, 0xa1, 0x12, 0x01, 0x00, 0x00, 0x00]
+
+    if instruction.data.len() < 25 {
+        warn!("⚠️  PumpSwap DEX Parse REJECTED: instruction.data.len()={} < 25 required", instruction.data.len());
+        return None;
+    }
+
+    // Validate discriminator (exact 8-byte match per Grok recommendation)
+    let discriminator = &instruction.data[0..8];
+    let is_buy = discriminator == [0x42, 0x3f, 0xa1, 0x12, 0x00, 0x00, 0x00, 0x00];
+    let is_sell = discriminator == [0x42, 0x3f, 0xa1, 0x12, 0x01, 0x00, 0x00, 0x00];
+
+    if !is_buy && !is_sell {
+        warn!("⚠️  PumpSwap DEX Parse REJECTED: Unknown discriminator {:?}", discriminator);
+        return None;
+    }
+
+    // Validate account count (11 minimum per Grok)
+    if instruction.accounts.len() < 11 {
+        warn!("⚠️  PumpSwap DEX Parse REJECTED: instruction.accounts.len()={} < 11 required", instruction.accounts.len());
+        return None;
+    }
+
+    let accounts = message.static_account_keys();
+
+    // ✅ GROK VERIFIED: Pool at index 0 (same as Raydium/Orca/etc)
+    let pool_address = accounts.get(instruction.accounts[0] as usize)?;
+
+    info!("✅ EXTRACTED POOL: {} | DEX: PumpSwap_DEX | From ix accounts[0]", pool_address);
+
+    let user_source = accounts.get(instruction.accounts[4] as usize)?;
+    let user_dest = accounts.get(instruction.accounts[5] as usize)?;
+
+    // Parse amounts from instruction data
+    let amount_in = u64::from_le_bytes([
+        instruction.data[8], instruction.data[9], instruction.data[10], instruction.data[11],
+        instruction.data[12], instruction.data[13], instruction.data[14], instruction.data[15],
+    ]);
+
+    let min_amount_out = u64::from_le_bytes([
+        instruction.data[16], instruction.data[17], instruction.data[18], instruction.data[19],
+        instruction.data[20], instruction.data[21], instruction.data[22], instruction.data[23],
+    ]);
+
+    Some((
+        pool_address.to_string(),
         user_source.to_string(),
         user_dest.to_string(),
         amount_in,
@@ -596,7 +661,8 @@ fn analyze_transaction(
                 "Raydium_CPMM" => parse_raydium_cpmm_swap(message, instruction),
                 "Orca_Whirlpools" => parse_orca_whirlpool_swap(message, instruction),
                 "Meteora_DLMM" => parse_meteora_dlmm_swap(message, instruction),
-                "PumpSwap" => parse_pumpswap_swap(message, instruction),
+                "PumpFun_BondingCurve" => parse_pumpfun_bonding_curve_swap(message, instruction),
+                "PumpSwap_DEX" => parse_pumpswap_dex_swap(message, instruction),
                 // Jupiter is NOT included - it's an aggregator (too slow for MEV)
                 // It routes through other DEXs which we already detect directly
                 _ => {
