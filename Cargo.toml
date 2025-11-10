@@ -6,20 +6,8 @@ edition = "2021"
 publish = false
 
 [[bin]]
-name = "mev_bot"
-path = "src/bin/mev_bot.rs"
-
-[[bin]]
-name = "elite_mev_ultra_minimal"
-path = "src/bin/elite_mev_ultra_minimal.rs"
-
-[[bin]]
 name = "elite_mev_bot_v2_1_production"
 path = "src/bin/elite_mev_bot_v2_1_production.rs"
-
-[[bin]]
-name = "elite_mev_bot_v2_1_ultra_speed"
-path = "src/bin/elite_mev_bot_v2_1_ultra_speed.rs"
 
 [[bin]]
 name = "shredstream_mev_bot"
@@ -30,24 +18,8 @@ name = "check_wallet_balance"
 path = "src/bin/check_wallet_balance.rs"
 
 [[bin]]
-name = "test_shredstream_simple"
-path = "src/bin/test_shredstream_simple.rs"
-
-[[bin]]
-name = "test_shredstream_basic"
-path = "src/bin/test_shredstream_basic.rs"
-
-[[bin]]
-name = "test_shredstream_data"
-path = "src/bin/test_shredstream_data.rs"
-
-[[bin]]
-name = "elite_mev_bot_v2_1_production_safe"
-path = "src/bin/elite_mev_bot_v2_1_production_safe.rs"
-
-[[bin]]
-name = "test_real_shredstream_grpc"
-path = "src/bin/test_real_shredstream_grpc.rs"
+name = "test_shredstream"
+path = "src/bin/test_shredstream.rs"
 
 [dependencies]
 # Core async runtime with all required features

@@ -6,15 +6,13 @@ use solana_stream_sdk::ShredstreamClient;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
-use tracing::{info, warn, debug};
+use tracing::{info, warn, debug, error};
 use crate::mev_sandwich_detector::{detect_sandwich_opportunities, SandwichConfig};
 
 pub struct ShredStreamProcessor {
     pub endpoint: String,
     pub buffer: BytesMut,
-    stream: Option<tonic::Streaming<solana_stream_sdk::shredstream_proto::Entry>>,
     current_slot: Arc<RwLock<u64>>,
-    initialized: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -30,129 +28,134 @@ impl ShredStreamProcessor {
         Self {
             endpoint,
             buffer: BytesMut::with_capacity(65535),
-            stream: None,
             current_slot: Arc::new(RwLock::new(0)),
-            initialized: false,
         }
     }
 
-    /// Initialize persistent gRPC-over-HTTPS connection
-    pub async fn initialize(&mut self) -> Result<()> {
-        if self.initialized {
-            return Ok(());
-        }
-
-        info!("🔌 Initializing ShredStream for MEV sandwich detection");
-        info!("📡 Endpoint: {}", self.endpoint);
-
-        // Connect to ShredStream via gRPC-over-HTTPS
-        let mut client = ShredstreamClient::connect(&self.endpoint).await
-            .map_err(|e| anyhow::anyhow!("ShredStream connection failed: {}", e))?;
-
-        info!("✅ ShredStream connection established");
-
-        // Subscribe to ALL entries (no filtering - per ORE bot working implementation)
-        let request = ShredstreamClient::create_empty_entries_request();
-        let stream = client.subscribe_entries(request).await?;
-
-        info!("✅ Subscribed to ShredStream (will filter DEX swaps locally)");
-
-        // Store stream for direct consumption in main loop
-        self.stream = Some(stream);
-        self.initialized = true;
-
-        Ok(())
-    }
-
-    /// Process ShredStream data directly in main loop (NO SPAWN)
-    /// This reads from the stream WITHOUT spawning a background task
+    /// Process ShredStream data - connects ONCE and keeps stream alive (ORE bot pattern)
     pub async fn process_real_shreds(&mut self) -> Result<ShredStreamEvent> {
         let start = Instant::now();
 
-        // Initialize if not already done
-        if !self.initialized {
-            self.initialize().await?;
-        }
+        info!("🔌 Connecting to ShredStream (ORE bot pattern - persistent connection)");
+        info!("📡 Endpoint: {}", self.endpoint);
 
-        // Get stream reference
-        let stream = self.stream.as_mut()
-            .ok_or_else(|| anyhow::anyhow!("ShredStream not initialized"))?;
+        // Connect ONCE to ShredStream with 10-second timeout (fail fast, retry in main loop)
+        let mut client = match tokio::time::timeout(
+            tokio::time::Duration::from_secs(10),
+            ShredstreamClient::connect(&self.endpoint)
+        ).await {
+            Ok(Ok(client)) => {
+                info!("✅ ShredStream connected successfully in {:.2}ms", start.elapsed().as_millis());
+                client
+            }
+            Ok(Err(e)) => {
+                error!("❌ ShredStream connection failed: {}", e);
+                return Err(anyhow::anyhow!("ShredStream connection failed: {}", e));
+            }
+            Err(_) => {
+                error!("❌ ShredStream connection TIMEOUT after 10 seconds");
+                return Err(anyhow::anyhow!("ShredStream connection timeout - will retry"));
+            }
+        };
 
-        // CRITICAL: Call stream.next() directly in main task (NO SPAWN)
-        match stream.next().await {
-            Some(slot_entry_result) => {
-                match slot_entry_result {
-                    Ok(slot_entry) => {
-                        let slot = slot_entry.slot;
+        let request = ShredstreamClient::create_empty_entries_request();
+        let mut stream = client.subscribe_entries(request).await?;
 
-                        // Update current slot
-                        {
-                            let mut current = self.current_slot.write().await;
-                            *current = slot;
-                        }
+        info!("✅ Subscribed to ShredStream entries - starting continuous processing loop");
 
-                        // Deserialize entries from binary data
-                        match bincode::deserialize::<Vec<Entry>>(&slot_entry.entries) {
-                            Ok(entries) => {
-                                let mut opportunities = 0u64;
-                                let mut total_bytes = 0usize;
+        let mut total_entries = 0u64;
 
-                                // MEV SANDWICH DETECTION - Detect victim swaps
-                                let sandwich_config = SandwichConfig::default();
-                                let sandwich_opps = detect_sandwich_opportunities(&entries, &sandwich_config);
+        // CRITICAL: Keep stream alive in loop (like ORE bot does)
+        while let Some(slot_entry_result) = stream.next().await {
+            match slot_entry_result {
+                Ok(slot_entry) => {
+                    let slot = slot_entry.slot;
 
-                                if !sandwich_opps.is_empty() {
-                                    debug!("🎯 {} sandwich opportunities detected in slot {}",
-                                           sandwich_opps.len(), slot);
-                                    opportunities += sandwich_opps.len() as u64;
-                                }
+                    // Update current slot
+                    {
+                        let mut current = self.current_slot.write().await;
+                        *current = slot;
+                    }
 
-                                // Process entries for PumpFun opportunities
-                                for entry in &entries {
-                                    for tx in &entry.transactions {
-                                        // Store transaction data in buffer
-                                        if let Ok(serialized) = bincode::serialize(tx) {
-                                            total_bytes += serialized.len();
-                                            self.buffer.clear();
-                                            self.buffer.extend_from_slice(&serialized);
+                    // Deserialize entries from binary data
+                    match bincode::deserialize::<Vec<Entry>>(&slot_entry.entries) {
+                        Ok(entries) => {
+                            total_entries += entries.len() as u64;
 
-                                            // Filter for PumpFun opportunities
-                                            if let Ok(count) = self.filter_pumpfun_shreds(&self.buffer) {
+                            let mut opportunities = 0u64;
+                            let mut total_bytes = 0usize;
+
+                            // MEV SANDWICH DETECTION - Detect victim swaps
+                            let sandwich_config = SandwichConfig::default();
+                            let sandwich_opps = detect_sandwich_opportunities(&entries, &sandwich_config);
+
+                            if !sandwich_opps.is_empty() {
+                                info!("🎯 {} sandwich opportunities detected in slot {} | Total entries: {}",
+                                      sandwich_opps.len(), slot, total_entries);
+                                opportunities += sandwich_opps.len() as u64;
+
+                                // Return immediately when opportunities found
+                                let latency_us = start.elapsed().as_micros() as f64;
+                                return Ok(ShredStreamEvent {
+                                    opportunity_count: opportunities,
+                                    latency_us,
+                                    data_size_bytes: slot_entry.entries.len(),
+                                    sandwich_opportunities: sandwich_opps,
+                                });
+                            }
+
+                            // Process entries for PumpFun opportunities
+                            for entry in &entries {
+                                for tx in &entry.transactions {
+                                    // Store transaction data in buffer
+                                    if let Ok(serialized) = bincode::serialize(tx) {
+                                        total_bytes += serialized.len();
+                                        self.buffer.clear();
+                                        self.buffer.extend_from_slice(&serialized);
+
+                                        // Filter for PumpFun opportunities
+                                        if let Ok(count) = self.filter_pumpfun_shreds(&self.buffer) {
+                                            if count > 0 {
                                                 opportunities += count;
                                             }
                                         }
                                     }
                                 }
+                            }
 
+                            // Return event even if no opportunities (keeps main loop alive)
+                            if opportunities > 0 || total_entries % 100 == 0 {
                                 let latency_us = start.elapsed().as_micros() as f64;
 
-                                Ok(ShredStreamEvent {
+                                if total_entries % 100 == 0 {
+                                    debug!("📊 ShredStream: {} entries processed, slot {}", total_entries, slot);
+                                }
+
+                                return Ok(ShredStreamEvent {
                                     opportunity_count: opportunities,
                                     latency_us,
                                     data_size_bytes: total_bytes,
-                                    sandwich_opportunities: sandwich_opps,
-                                })
-                            }
-                            Err(e) => {
-                                warn!("⚠️ Failed to deserialize entries: {}", e);
-                                Ok(ShredStreamEvent {
-                                    opportunity_count: 0,
-                                    latency_us: start.elapsed().as_micros() as f64,
-                                    data_size_bytes: 0,
                                     sandwich_opportunities: Vec::new(),
-                                })
+                                });
                             }
                         }
-                    }
-                    Err(e) => {
-                        Err(anyhow::anyhow!("ShredStream error: {}", e))
+                        Err(e) => {
+                            warn!("⚠️ Failed to deserialize entries in slot {}: {}", slot, e);
+                            // Continue processing next entry instead of failing
+                            continue;
+                        }
                     }
                 }
-            }
-            None => {
-                Err(anyhow::anyhow!("ShredStream ended: stream returned None"))
+                Err(e) => {
+                    error!("⚠️ ShredStream error: {} - will reconnect", e);
+                    // Return error to trigger reconnection in main loop
+                    return Err(anyhow::anyhow!("ShredStream stream error: {}", e));
+                }
             }
         }
+
+        warn!("🛑 ShredStream stream ended - returning to trigger reconnect");
+        Err(anyhow::anyhow!("ShredStream stream ended"))
     }
 
     /// Get the latest raw ShredStream data for processing

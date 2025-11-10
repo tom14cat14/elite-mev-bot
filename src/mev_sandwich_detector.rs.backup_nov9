@@ -136,28 +136,24 @@ fn parse_raydium_amm_v4_swap(
     // 11: user_owner
 
     if instruction.accounts.len() < 12 {
-        warn!("⚠️  AMM V4 Parse REJECTED: instruction.accounts.len()={} < 12 required", instruction.accounts.len());
         return None; // Not enough accounts for Raydium swap
     }
 
     let accounts = message.static_account_keys();
 
-    // DIAGNOSTIC: Log account indices to diagnose extraction failure
-    info!("🔍 AMM V4 Parse | ix.accounts.len()={} | accounts.len()={} | ix.accounts[0..3]={:?}",
-          instruction.accounts.len(), accounts.len(),
-          &instruction.accounts[0..3.min(instruction.accounts.len())]);
+    // Extract key accounts
+    let pool_address = accounts.get(instruction.accounts[1] as usize)?;
 
-    // ✅ GROK VERIFIED: Raydium AMM V4 pool at account index 0 (amm state account)
-    let pool_address = accounts.get(instruction.accounts[0] as usize)?;
-
-    info!("✅ EXTRACTED POOL: {} | DEX: RaydiumAmmV4 | From ix accounts[0]", pool_address);
+    // Validate pool address - reject System Program and other invalid addresses
+    if !is_valid_pool_address(pool_address) {
+        return None;
+    }
 
     let user_source = accounts.get(instruction.accounts[9] as usize)?;
     let user_dest = accounts.get(instruction.accounts[10] as usize)?;
 
     // Parse instruction data (first byte is discriminator, then amounts)
     if instruction.data.len() < 17 {
-        warn!("⚠️  AMM V4 Parse REJECTED: instruction.data.len()={} < 17 required for amounts", instruction.data.len());
         return None; // Not enough data
     }
 
@@ -167,7 +163,6 @@ fn parse_raydium_amm_v4_swap(
     // [9-16]: minimum_amount_out (u64 little-endian)
 
     if instruction.data[0] != 9 {
-        warn!("⚠️  AMM V4 Parse REJECTED: Unknown discriminator {} (expected 9)", instruction.data[0]);
         return None; // Not a swap instruction
     }
 
@@ -223,7 +218,6 @@ fn parse_raydium_clmm_swap(
     // Extract pool regardless of swap instruction type (swap, swapV2, swapWithCap, etc.)
 
     if instruction.data.len() < 24 {
-        warn!("⚠️  CLMM Parse REJECTED: instruction.data.len()={} < 24 required", instruction.data.len());
         return None;
     }
 
@@ -240,20 +234,23 @@ fn parse_raydium_clmm_swap(
     // 7: output_vault
 
     if instruction.accounts.len() < 8 {
-        warn!("⚠️  CLMM Parse REJECTED: instruction.accounts.len()={} < 8 required", instruction.accounts.len());
         return None;
     }
 
-    // DIAGNOSTIC: Log account indices to diagnose extraction failure
-    info!("🔍 CLMM Parse | ix.accounts.len()={} | accounts.len()={} | ix.accounts[0..3]={:?}",
-          instruction.accounts.len(), accounts.len(),
-          &instruction.accounts[0..3.min(instruction.accounts.len())]);
+    // FIXED: Raydium CLMM pool is at account index 4, NOT 0
+    // accounts[0] was extracting user wallets (System Program owned)
+    let pool_address = accounts.get(instruction.accounts[4] as usize)?;
 
-    // ✅ GROK VERIFIED: Pool at index 0 (lb_pair/pool state account)
-    let pool_address = accounts.get(instruction.accounts[0] as usize)?;
+    // DEBUG: Log pool extraction
+    debug!("🔍 Raydium CLMM pool extracted: {} | Checking validity...", pool_address);
 
-    info!("✅ EXTRACTED POOL: {} | DEX: Raydium_CLMM | From ix accounts[0]",
-          pool_address);
+    // Validate pool address - reject System Program and other invalid addresses
+    if !is_valid_pool_address(pool_address) {
+        warn!("❌ Invalid pool address rejected: {} (System/Token program)", pool_address);
+        return None;
+    }
+
+    debug!("✅ Pool address passed validation: {}", pool_address);
 
     let user_source = accounts.get(instruction.accounts[4] as usize)?;
     let user_dest = accounts.get(instruction.accounts[5] as usize)?;
@@ -286,26 +283,22 @@ fn parse_raydium_cpmm_swap(
     // Extract pool regardless of swap instruction type (swap_base_input, swap_base_output, etc.)
 
     if instruction.data.len() < 24 {
-        warn!("⚠️  CPMM Parse REJECTED: instruction.data.len()={} < 24 required", instruction.data.len());
         return None;
     }
 
     let accounts = message.static_account_keys();
 
     if instruction.accounts.len() < 8 {
-        warn!("⚠️  CPMM Parse REJECTED: instruction.accounts.len()={} < 8 required", instruction.accounts.len());
         return None;
     }
 
-    // DIAGNOSTIC: Log account indices to diagnose extraction failure
-    info!("🔍 CPMM Parse | ix.accounts.len()={} | accounts.len()={} | ix.accounts[0..5]={:?}",
-          instruction.accounts.len(), accounts.len(),
-          &instruction.accounts[0..5.min(instruction.accounts.len())]);
+    // CPMM pool is at account index 4
+    let pool_address = accounts.get(instruction.accounts[4] as usize)?;
 
-    // ✅ GROK VERIFIED: Raydium CPMM pool at account index 0 (cpmm_pool state account)
-    let pool_address = accounts.get(instruction.accounts[0] as usize)?;
-
-    info!("✅ EXTRACTED POOL: {} | DEX: RaydiumCpmm | From ix accounts[0]", pool_address);
+    // Validate pool address - reject System Program and other invalid addresses
+    if !is_valid_pool_address(pool_address) {
+        return None;
+    }
 
     let user_source = accounts.get(instruction.accounts[4] as usize)?;
     let user_dest = accounts.get(instruction.accounts[5] as usize)?;
@@ -338,7 +331,6 @@ fn parse_orca_whirlpool_swap(
     // Extract pool regardless of swap instruction type (swap, swapV2, etc.)
 
     if instruction.data.len() < 24 {
-        warn!("⚠️  Orca Parse REJECTED: instruction.data.len()={} < 24 required", instruction.data.len());
         return None;
     }
 
@@ -358,36 +350,17 @@ fn parse_orca_whirlpool_swap(
     // 10: oracle
 
     if instruction.accounts.len() < 11 {
-        warn!("⚠️  Orca Parse REJECTED: instruction.accounts.len()={} < 11 required", instruction.accounts.len());
         return None;
     }
 
-    // 🔍 COMPREHENSIVE DIAGNOSTIC: Log ALL instruction accounts and their resolved addresses
-    info!("🔍🔍🔍 ORCA PARSE DIAGNOSTIC START 🔍🔍🔍");
-    info!("  instruction.accounts.len() = {}", instruction.accounts.len());
-    info!("  message accounts.len() = {}", accounts.len());
+    // FIXED: Orca Whirlpool pool is at account index 4, NOT 1
+    // accounts[1] was extracting user wallets or token programs
+    let pool_address = accounts.get(instruction.accounts[4] as usize)?;
 
-    // Log ALL instruction account indices and what they resolve to
-    for (i, &account_idx) in instruction.accounts.iter().enumerate().take(11) {
-        if let Some(account) = accounts.get(account_idx as usize) {
-            let addr_str = account.to_string();
-            info!("  ix.accounts[{}] = {} -> {}", i, account_idx, &addr_str);
-        } else {
-            warn!("  ix.accounts[{}] = {} -> OUT OF BOUNDS (accounts.len={})", i, account_idx, accounts.len());
-        }
-    }
-
-    info!("🔍🔍🔍 ORCA PARSE DIAGNOSTIC END 🔍🔍🔍");
-
-    // ✅ GROK VERIFIED: Extract pool from accounts[0] (whirlpool state account)
-    let pool_address = if let Some(addr) = accounts.get(instruction.accounts[0] as usize) {
-        info!("✅ EXTRACTED POOL: {} | DEX: OrcaWhirlpools | From ix accounts[0]", addr);
-        addr
-    } else {
-        warn!("❌ FAILED: ix.accounts[0]={} is out of bounds (accounts.len={})",
-              instruction.accounts[0], accounts.len());
+    // Validate pool address - reject System Program and other invalid addresses
+    if !is_valid_pool_address(pool_address) {
         return None;
-    };
+    }
 
     let user_source = accounts.get(instruction.accounts[3] as usize)?;
     let user_dest = accounts.get(instruction.accounts[5] as usize)?;
@@ -420,7 +393,6 @@ fn parse_meteora_dlmm_swap(
     // Extract pool regardless of swap instruction type (swap, swap2, etc.)
 
     if instruction.data.len() < 24 {
-        warn!("⚠️  Meteora Parse REJECTED: instruction.data.len()={} < 24 required", instruction.data.len());
         return None;
     }
 
@@ -439,28 +411,16 @@ fn parse_meteora_dlmm_swap(
     // 9: token_program
 
     if instruction.accounts.len() < 10 {
-        warn!("⚠️  Meteora Parse REJECTED: instruction.accounts.len()={} < 10 required", instruction.accounts.len());
         return None;
     }
 
-    // DIAGNOSTIC: Log account indices to diagnose extraction failure
-    info!("🔍 Meteora Parse | ix.accounts.len()={} | accounts.len()={} | ix.accounts[0..5]={:?}",
-          instruction.accounts.len(), accounts.len(),
-          &instruction.accounts[0..5.min(instruction.accounts.len())]);
+    // Meteora DLMM pool is at account index 4
+    let pool_address = accounts.get(instruction.accounts[4] as usize)?;
 
-    // ✅ GROK VERIFIED: Meteora DLMM pool at account index 0 (lb_pair state account)
-    let pool_idx = instruction.accounts.get(0)?;
-    let pool_address = accounts.get(*pool_idx as usize);
-
-    if pool_address.is_none() {
-        warn!("⚠️  Meteora Parse REJECTED: accounts[{}] out of bounds (accounts.len={})",
-              pool_idx, accounts.len());
+    // Validate pool address - reject System Program and other invalid addresses
+    if !is_valid_pool_address(pool_address) {
         return None;
     }
-    let pool_address = pool_address.unwrap();
-
-    info!("✅ EXTRACTED POOL: {} | DEX: MeteoraDlmm | From ix accounts[2]={} | accounts.len={}",
-          pool_address, pool_idx, accounts.len());
 
     let user_source = accounts.get(instruction.accounts[0] as usize)?;
     let user_dest = accounts.get(instruction.accounts[1] as usize)?;
@@ -495,7 +455,6 @@ fn parse_pumpswap_swap(
     // Sell: [51, 230, 133, 164, 1, 127, 131, 173]
 
     if instruction.data.len() < 24 {
-        warn!("⚠️  PumpSwap Parse REJECTED: instruction.data.len()={} < 24 required", instruction.data.len());
         return None;
     }
 
@@ -504,7 +463,6 @@ fn parse_pumpswap_swap(
     let is_sell = instruction.data[0..8] == [51, 230, 133, 164, 1, 127, 131, 173];
 
     if !is_buy && !is_sell {
-        warn!("⚠️  PumpSwap Parse REJECTED: Unknown discriminator {:?}", &instruction.data[0..8]);
         return None;
     }
 
@@ -525,17 +483,10 @@ fn parse_pumpswap_swap(
     // 11: program
 
     if instruction.accounts.len() < 7 {
-        warn!("⚠️  PumpSwap Parse REJECTED: instruction.accounts.len()={} < 7 required", instruction.accounts.len());
         return None;
     }
 
-    info!("🔍 PumpSwap Parse | is_buy={} | is_sell={} | ix.accounts.len()={} | accounts.len()={}",
-          is_buy, is_sell, instruction.accounts.len(), accounts.len());
-
     let bonding_curve = accounts.get(instruction.accounts[3] as usize)?;
-
-    info!("✅ EXTRACTED POOL: {} | DEX: PumpSwap | From ix accounts[3] (bonding curve)", bonding_curve);
-
     let user_source = accounts.get(instruction.accounts[5] as usize)?; // associated_user
     let user_dest = accounts.get(instruction.accounts[4] as usize)?;   // associated_bonding_curve
 
@@ -621,14 +572,11 @@ fn analyze_transaction(
 
                     // If we parsed swap details, include them
                     let (pool_addr, input_mint, output_mint, amount_in, min_out) = if let Some(details) = swap_details {
-                        info!("✅ EXTRACTED POOL: {} | Size: VERIFIED | Amount: {} lamports ({:.4} SOL)",
+                        info!("✅ Parsed swap details | Pool: {} | Amount: {} lamports ({:.4} SOL)",
                               &details.0[..8], details.3, details.3 as f64 / 1_000_000_000.0);
                         (Some(details.0), Some(details.1), Some(details.2), Some(details.3), Some(details.4))
                     } else {
-                        warn!("❌ POOL EXTRACTION FAILED for DEX: {}", dex_name);
-                        warn!("   Program ID: {}", program_id);
-                        warn!("   Instruction accounts: {} accounts", instruction.accounts.len());
-                        debug!("   Full instruction: {:?}", instruction);
+                        debug!("⚠️  Could not parse swap details for {} (using estimates)", dex_name);
                         (None, None, None, None, None)
                     };
 

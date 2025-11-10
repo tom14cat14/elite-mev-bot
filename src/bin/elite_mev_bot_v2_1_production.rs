@@ -1908,13 +1908,8 @@ async fn main() -> Result<()> {
     info!("🔗 RPC endpoint: {}", rpc_url);
     let mut processor = ShredStreamProcessor::new(endpoint.clone());
 
-    // Initialize persistent gRPC connection and start background streaming
-    info!("🔌 Initializing ShredStream gRPC connection...");
-    processor.initialize().await?;
-    info!("✅ ShredStream connected and streaming swaps in background");
-
-    // No need for separate spawn task - ShredStreamProcessor handles background streaming internally
-    // The initialize() call above already started the background task
+    // ShredStream will connect automatically on first call to process_real_shreds()
+    info!("🔌 ShredStream processor created (will connect on first data request)");
     info!("✅ ShredStream background processor active and ready");
 
     // Initialize MEV database tracker
@@ -2031,9 +2026,15 @@ async fn main() -> Result<()> {
                             return Err(e);  // Exit main loop - supervisor will restart
                         }
 
-                        // Log non-fatal errors periodically
-                        if total_scans % 100 == 0 {
-                            warn!("⚠️ ShredStream processing error: {} (cycle {})", e, total_scans);
+                        // Connection timeout or failure - wait 5 seconds before retry
+                        if error_msg.contains("connection") || error_msg.contains("timeout") {
+                            warn!("⚠️ ShredStream connection error: {} - waiting 5s before retry", e);
+                            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                        } else {
+                            // Log other non-fatal errors periodically
+                            if total_scans % 100 == 0 {
+                                warn!("⚠️ ShredStream processing error: {} (cycle {})", e, total_scans);
+                            }
                         }
                     }
                 }

@@ -45,3 +45,5 @@ nohup.out
 
 # Wallets (sensitive data)
 wallets/
+data/mev_tracking.db.backup_*
+data/*.db
