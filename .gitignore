@@ -1,0 +1,52 @@
+# Rust build artifacts
+target/
+**/*.rs.bk
+*.pdb
+
+# Compiled binaries
+*.exe
+
+# Cargo
+Cargo.lock
+
+# Environment variables
+.env
+.env.*
+*.env
+!.env.example
+!*.env.example
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Keys and secrets
+*key*
+*secret*
+*.pem
+*.p12
+
+# Temporary files
+*.tmp
+*.temp
+nohup.out
+
+# Build artifacts
+*.so
+*.dylib
+*.dll
+
+# Wallets (sensitive data)
+wallets/
+data/mev_tracking.db.backup_*
+data/*.db

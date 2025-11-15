@@ -1,0 +1,7 @@
+[build]
+# Enable SIMD optimizations for maximum performance
+# Grok's recommendation: target-cpu=native for ~5ms decoding boost
+rustflags = [
+    "-C", "target-cpu=native",
+    "-C", "target-feature=+avx2,+fma,+sse4.2"
+]

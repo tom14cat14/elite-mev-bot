@@ -1,0 +1,34 @@
+{
+  "risk_management": {
+    "max_position_size_sol": 0.5,
+    "max_daily_loss_sol": 5.0,
+    "max_concurrent_trades": 3,
+    "quality_threshold": 6.5,
+    "enable_paper_trading": true,
+    "emergency_stop": false
+  },
+  "trading_params": {
+    "min_profit_threshold_sol": 0.08,
+    "max_slippage_percentage": 5.0,
+    "bonding_curve_completion_threshold": 0.75,
+    "enable_jito_bundles": true,
+    "jito_tip_lamports": 10000,
+    "gas_price_multiplier": 1.2
+  },
+  "performance_tuning": {
+    "target_latency_ms": 15.0,
+    "enable_simd_optimizations": true,
+    "worker_thread_count": 4,
+    "enable_cpu_pinning": true,
+    "memory_pool_size": 1000
+  },
+  "circuit_breakers": {
+    "max_consecutive_failures": 5,
+    "failure_rate_threshold": 0.3,
+    "cooldown_duration_seconds": 300,
+    "enable_volatility_protection": true,
+    "market_impact_threshold": 0.1
+  },
+  "last_updated": "2025-11-08T07:02:30.093646052+00:00",
+  "version": 1
+}
