@@ -51,13 +51,21 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn print_fee_calculation(calc: &FeeCalculation) {
-    let status = if calc.should_execute { "✅ EXECUTE" } else { "❌ SKIP" };
+    let status = if calc.should_execute {
+        "✅ EXECUTE"
+    } else {
+        "❌ SKIP"
+    };
     let multiplier = calc.net_profit_sol / calc.total_fees_sol;
 
     println!("   Result: {} ({})", status, calc.tier_name);
     println!("   Net Profit: {:.4} SOL", calc.net_profit_sol);
-    println!("   Total Fees: {:.4} SOL (Gas: {:.4}, DEX: {:.4})",
-             calc.total_fees_sol, calc.gas_tip_sol, calc.dex_fees_sol);
-    println!("   Actual Multiplier: {:.2}x (Required: {:.2}x)",
-             multiplier, calc.profit_multiplier);
+    println!(
+        "   Total Fees: {:.4} SOL (Gas: {:.4}, DEX: {:.4})",
+        calc.total_fees_sol, calc.gas_tip_sol, calc.dex_fees_sol
+    );
+    println!(
+        "   Actual Multiplier: {:.2}x (Required: {:.2}x)",
+        multiplier, calc.profit_multiplier
+    );
 }

@@ -3,10 +3,10 @@
 //! Fetches pool state from on-chain to get all required accounts for swap instructions.
 
 use anyhow::{anyhow, Result};
+use borsh::BorshDeserialize;
 use solana_client::rpc_client::RpcClient;
 use solana_sdk::pubkey::Pubkey;
 use std::str::FromStr;
-use borsh::BorshDeserialize;
 
 /// Raydium AMM V4 program ID
 pub const RAYDIUM_AMM_V4_PROGRAM_ID: &str = "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8";
@@ -121,13 +121,8 @@ impl RaydiumPoolState {
         let program_id = Pubkey::from_str(RAYDIUM_AMM_V4_PROGRAM_ID)
             .map_err(|e| anyhow!("Invalid Raydium program ID: {}", e))?;
 
-        let (authority, _bump) = Pubkey::find_program_address(
-            &[
-                b"amm authority",
-                pool_address.as_ref(),
-            ],
-            &program_id,
-        );
+        let (authority, _bump) =
+            Pubkey::find_program_address(&[b"amm authority", pool_address.as_ref()], &program_id);
 
         Ok(authority)
     }

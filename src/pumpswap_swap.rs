@@ -3,6 +3,7 @@
 //! Builds swap instructions for PumpSwap bonding curve pools to enable sandwich attacks.
 //! PumpSwap uses a simple bonding curve model similar to pump.fun.
 
+use crate::pumpswap_state::PumpSwapBondingCurveState;
 use anyhow::{anyhow, Result};
 use solana_sdk::{
     instruction::{AccountMeta, Instruction},
@@ -10,7 +11,6 @@ use solana_sdk::{
     system_program, sysvar,
 };
 use std::str::FromStr;
-use crate::pumpswap_state::PumpSwapBondingCurveState;
 
 /// PumpSwap program ID
 pub const PUMPSWAP_PROGRAM_ID: &str = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
@@ -64,8 +64,8 @@ pub fn build_pumpswap_buy_instruction(
     // 11: program
 
     let token_program = spl_token::id();
-    let event_authority = Pubkey::from_str("Ce6TQqeHC9p8KetsN6JsjHK7UTZk7nasjjnr7XxXp9F1")
-        .unwrap_or(program_id);
+    let event_authority =
+        Pubkey::from_str("Ce6TQqeHC9p8KetsN6JsjHK7UTZk7nasjjnr7XxXp9F1").unwrap_or(program_id);
 
     let accounts = vec![
         AccountMeta::new(pool_state.global, false),
@@ -118,8 +118,8 @@ pub fn build_pumpswap_sell_instruction(
 
     // Same account structure as buy instruction
     let token_program = spl_token::id();
-    let event_authority = Pubkey::from_str("Ce6TQqeHC9p8KetsN6JsjHK7UTZk7nasjjnr7XxXp9F1")
-        .unwrap_or(program_id);
+    let event_authority =
+        Pubkey::from_str("Ce6TQqeHC9p8KetsN6JsjHK7UTZk7nasjjnr7XxXp9F1").unwrap_or(program_id);
 
     let accounts = vec![
         AccountMeta::new(pool_state.global, false),
@@ -226,7 +226,10 @@ mod tests {
         assert_eq!(instruction.accounts[1].pubkey, pool_state.fee_recipient);
         assert_eq!(instruction.accounts[2].pubkey, pool_state.token_mint);
         assert_eq!(instruction.accounts[3].pubkey, pool_state.bonding_curve);
-        assert_eq!(instruction.accounts[4].pubkey, pool_state.associated_bonding_curve);
+        assert_eq!(
+            instruction.accounts[4].pubkey,
+            pool_state.associated_bonding_curve
+        );
         assert_eq!(instruction.accounts[5].pubkey, associated_user);
     }
 
@@ -247,7 +250,7 @@ mod tests {
             &pool_state,
             &associated_user,
             &user_wallet,
-            1_000_000, // 1M tokens
+            1_000_000,   // 1M tokens
             900_000_000, // Min 0.9 SOL (10% slippage)
         );
 
@@ -292,15 +295,27 @@ mod tests {
 
         // Verify amount_in encoding (little-endian u64 at bytes 8-15)
         let parsed_amount_in = u64::from_le_bytes([
-            ix.data[8], ix.data[9], ix.data[10], ix.data[11],
-            ix.data[12], ix.data[13], ix.data[14], ix.data[15],
+            ix.data[8],
+            ix.data[9],
+            ix.data[10],
+            ix.data[11],
+            ix.data[12],
+            ix.data[13],
+            ix.data[14],
+            ix.data[15],
         ]);
         assert_eq!(parsed_amount_in, amount_in);
 
         // Verify min_amount_out encoding (little-endian u64 at bytes 16-23)
         let parsed_min_out = u64::from_le_bytes([
-            ix.data[16], ix.data[17], ix.data[18], ix.data[19],
-            ix.data[20], ix.data[21], ix.data[22], ix.data[23],
+            ix.data[16],
+            ix.data[17],
+            ix.data[18],
+            ix.data[19],
+            ix.data[20],
+            ix.data[21],
+            ix.data[22],
+            ix.data[23],
         ]);
         assert_eq!(parsed_min_out, min_amount_out);
     }

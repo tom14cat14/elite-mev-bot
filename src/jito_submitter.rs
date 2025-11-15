@@ -1,8 +1,8 @@
+use anyhow::Result;
+use once_cell::sync::Lazy;
+use solana_sdk::transaction::Transaction;
 use tokio::sync::mpsc;
 use tokio::time::{self, Duration, Instant};
-use once_cell::sync::Lazy;
-use anyhow::Result;
-use solana_sdk::transaction::Transaction;
 
 // Simple logging macros (matching main bot)
 macro_rules! info {
@@ -49,12 +49,17 @@ impl JitoSubmitter {
 
             info!("🚀 JITO Queue Processor started - Rate: 1 bundle per 1.1s");
 
-            while let Some((bundle, token_mint, position_size, expected_profit_sol)) = queue_rx.recv().await {
+            while let Some((bundle, token_mint, position_size, expected_profit_sol)) =
+                queue_rx.recv().await
+            {
                 // Rate limiting: ensure at least 1.1s between submissions
                 let elapsed = last_submit.elapsed();
                 if elapsed < Duration::from_millis(1100) {
                     let sleep_duration = Duration::from_millis(1100) - elapsed;
-                    info!("⏱️  Rate limit: Sleeping {:?} before submission", sleep_duration);
+                    info!(
+                        "⏱️  Rate limit: Sleeping {:?} before submission",
+                        sleep_duration
+                    );
                     time::sleep(sleep_duration).await;
                 }
 
@@ -66,7 +71,8 @@ impl JitoSubmitter {
                     // Get wallet keypair from environment for signing
                     let wallet_key = std::env::var("WALLET_PRIVATE_KEY")
                         .expect("WALLET_PRIVATE_KEY must be set");
-                    let wallet_keypair = solana_sdk::signature::Keypair::from_base58_string(&wallet_key);
+                    let wallet_keypair =
+                        solana_sdk::signature::Keypair::from_base58_string(&wallet_key);
 
                     info!("📡 Initializing JITO client: {}", endpoint);
                     let jito_client = crate::jito_bundle_client::JitoBundleClient::new(
@@ -98,10 +104,13 @@ impl JitoSubmitter {
                 let gas_fees_sol = 0.0001; // 0.0001 SOL estimate for gas
 
                 // Get dynamic tip from JITO API
-                let tip_lamports = if let Some(cached_data) = jito_client.get_cached_tip_floor().await {
+                let tip_lamports = if let Some(cached_data) =
+                    jito_client.get_cached_tip_floor().await
+                {
                     // ALWAYS use 99th percentile as base
                     let tip_99th_sol = cached_data.landed_tips_99th / 1_000_000_000.0;
-                    let base_tip_99_lamports = (cached_data.landed_tips_99th * 1_000_000_000.0) as u64;
+                    let base_tip_99_lamports =
+                        (cached_data.landed_tips_99th * 1_000_000_000.0) as u64;
 
                     // Calculate fee margin with 99th percentile base
                     let total_fees_base = dex_fees_sol + gas_fees_sol + tip_99th_sol;
@@ -116,7 +125,7 @@ impl JitoSubmitter {
                     // Medium margin (5-10%) → 1.5-2.0x scaling (very aggressive)
                     // Low margin (>10%) → 1.0x (99th percentile only)
                     let tip_multiplier = if fee_percentage >= 10.0 {
-                        1.0  // Stick to 99th percentile
+                        1.0 // Stick to 99th percentile
                     } else if fee_percentage >= 5.0 {
                         // Medium margin: Scale from 1.5x to 2.0x
                         1.5 + ((10.0 - fee_percentage) / 5.0) * 0.5
@@ -149,7 +158,9 @@ impl JitoSubmitter {
                     // Use conservative 5% of profit for fallback
                     let total_fee_budget = expected_profit_sol * 0.05;
                     let tip_budget = total_fee_budget * 0.40; // 40% for tip, 60% for gas
-                    ((tip_budget * 1_000_000_000.0) as u64).max(100_000).min(5_000_000)
+                    ((tip_budget * 1_000_000_000.0) as u64)
+                        .max(100_000)
+                        .min(5_000_000)
                 };
 
                 // RATE LIMITING: Enforce 1.1 seconds per request (JITO best practice)
@@ -158,7 +169,10 @@ impl JitoSubmitter {
                 let min_interval = Duration::from_millis(1100); // 1.1 seconds
                 if elapsed_since_last < min_interval {
                     let wait_time = min_interval - elapsed_since_last;
-                    info!("⏱️  Rate limiting: waiting {:?} before next submission", wait_time);
+                    info!(
+                        "⏱️  Rate limiting: waiting {:?} before next submission",
+                        wait_time
+                    );
                     tokio::time::sleep(wait_time).await;
                 }
 
@@ -167,21 +181,34 @@ impl JitoSubmitter {
 
                 // Add timeout to prevent infinite hangs (Grok's fix)
                 let submit_timeout = Duration::from_secs(15);
-                match time::timeout(submit_timeout, jito_client.submit_bundle(bundle.clone(), Some(tip_lamports))).await {
+                match time::timeout(
+                    submit_timeout,
+                    jito_client.submit_bundle(bundle.clone(), Some(tip_lamports)),
+                )
+                .await
+                {
                     Ok(Ok(bundle_id)) => {
-                        info!("✅ Bundle submitted successfully: {} | Token: {} | Amount: {:.3} SOL",
-                              bundle_id, token_mint, position_size);
+                        info!(
+                            "✅ Bundle submitted successfully: {} | Token: {} | Amount: {:.3} SOL",
+                            bundle_id, token_mint, position_size
+                        );
                         last_submit = Instant::now();
                     }
                     Ok(Err(e)) if e.to_string().contains("429") => {
                         // NO RETRIES: PumpFun MEV is time-sensitive, opportunity is gone after first miss
-                        warn!("⚠️  429 Rate Limited - SKIPPING (opportunity expired) | Token: {}", token_mint);
+                        warn!(
+                            "⚠️  429 Rate Limited - SKIPPING (opportunity expired) | Token: {}",
+                            token_mint
+                        );
                     }
                     Ok(Err(e)) => {
                         error!("❌ Bundle submission failed: {} | Token: {}", e, token_mint);
                     }
                     Err(_timeout) => {
-                        error!("❌ Bundle submission TIMED OUT after 15s | Token: {}", token_mint);
+                        error!(
+                            "❌ Bundle submission TIMED OUT after 15s | Token: {}",
+                            token_mint
+                        );
                     }
                 }
             }
@@ -193,8 +220,15 @@ impl JitoSubmitter {
     }
 
     /// Submit a bundle to the queue (non-blocking)
-    pub fn submit(&self, bundle: Vec<Transaction>, token_mint: String, position_size: f64, expected_profit_sol: f64) -> Result<()> {
-        self.queue_tx.send((bundle, token_mint, position_size, expected_profit_sol))
+    pub fn submit(
+        &self,
+        bundle: Vec<Transaction>,
+        token_mint: String,
+        position_size: f64,
+        expected_profit_sol: f64,
+    ) -> Result<()> {
+        self.queue_tx
+            .send((bundle, token_mint, position_size, expected_profit_sol))
             .map_err(|_| anyhow::anyhow!("Queue send failed - processor may be stopped"))?;
         Ok(())
     }

@@ -110,7 +110,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("[INFO]   • Total cycles: {}", total_cycles);
     println!("[INFO]   • Total opportunities: {}", total_opportunities);
     println!("[INFO]   • Runtime: {:.1}s", runtime);
-    println!("[INFO]   • Average performance: {:.1} cycles/sec", total_cycles as f64 / runtime);
+    println!(
+        "[INFO]   • Average performance: {:.1} cycles/sec",
+        total_cycles as f64 / runtime
+    );
     println!("[INFO]   • Average latency: {:.1}μs", avg_latency);
     println!("[INFO] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 

@@ -1,8 +1,8 @@
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
+use solana_sdk::pubkey::Pubkey;
 use std::arch::x86_64::*;
 use std::mem;
-use solana_sdk::pubkey::Pubkey;
-use serde::{Deserialize, Serialize};
 
 /// Ultra-fast SIMD optimizations specifically for PumpFun operations
 /// Target: 3-5ms additional savings for brand new token processing
@@ -54,7 +54,9 @@ impl PumpFunSimdOptimizations {
     /// SIMD-accelerated PumpFun instruction parsing
     /// Uses AVX2 for 4x faster instruction detection
     #[target_feature(enable = "avx2,fma,sse4.2")]
-    pub unsafe fn parse_pumpfun_instruction_simd(data: &[u8]) -> Result<Option<PumpFunInstructionType>> {
+    pub unsafe fn parse_pumpfun_instruction_simd(
+        data: &[u8],
+    ) -> Result<Option<PumpFunInstructionType>> {
         if data.len() < 8 {
             return Ok(None);
         }
@@ -79,15 +81,15 @@ impl PumpFunSimdOptimizations {
 
         if create_match {
             Ok(Some(PumpFunInstructionType::CreateToken(
-                Self::parse_create_instruction_simd(data)?
+                Self::parse_create_instruction_simd(data)?,
             )))
         } else if buy_match {
             Ok(Some(PumpFunInstructionType::BuyToken(
-                Self::parse_buy_instruction_simd(data)?
+                Self::parse_buy_instruction_simd(data)?,
             )))
         } else if sell_match {
             Ok(Some(PumpFunInstructionType::SellToken(
-                Self::parse_sell_instruction_simd(data)?
+                Self::parse_sell_instruction_simd(data)?,
             )))
         } else {
             Ok(None)
@@ -363,18 +365,21 @@ impl PumpFunSimdOptimizations {
     unsafe fn calculate_velocity_simd(volumes: &[f64], times: &[f64]) -> f64 {
         // Use SIMD for parallel volume/time calculations
         // This is a simplified version - real implementation would use proper SIMD intrinsics
-        volumes.iter().zip(times.iter())
+        volumes
+            .iter()
+            .zip(times.iter())
             .map(|(v, t)| v / t)
-            .sum::<f64>() / volumes.len() as f64
+            .sum::<f64>()
+            / volumes.len() as f64
     }
 
     /// Check if SIMD optimizations are available
     pub fn is_optimized_simd_available() -> bool {
         #[cfg(target_arch = "x86_64")]
         {
-            is_x86_feature_detected!("avx2") &&
-            is_x86_feature_detected!("fma") &&
-            is_x86_feature_detected!("sse4.2")
+            is_x86_feature_detected!("avx2")
+                && is_x86_feature_detected!("fma")
+                && is_x86_feature_detected!("sse4.2")
         }
         #[cfg(not(target_arch = "x86_64"))]
         {
@@ -423,16 +428,18 @@ mod tests {
 
     #[test]
     fn test_simd_availability() {
-        println!("SIMD optimizations available: {}",
-                 PumpFunSimdOptimizations::is_optimized_simd_available());
+        println!(
+            "SIMD optimizations available: {}",
+            PumpFunSimdOptimizations::is_optimized_simd_available()
+        );
     }
 
     #[test]
     fn test_bonding_curve_price_calculation() {
         let price = PumpFunSimdOptimizations::calculate_bonding_curve_price_fast(
-            30_000_000_000, // 30 SOL in lamports
+            30_000_000_000,        // 30 SOL in lamports
             1_073_000_000_000_000, // ~1.073M tokens
-            1_000_000, // 1 token purchase
+            1_000_000,             // 1 token purchase
         );
         assert!(price > 0);
     }
@@ -441,9 +448,8 @@ mod tests {
     fn test_completion_prediction() {
         let volumes = vec![1.0, 2.0, 3.0, 4.0];
         let times = vec![1.0, 1.0, 1.0, 1.0];
-        let prediction = PumpFunSimdOptimizations::predict_completion_time_simd(
-            50.0, &volumes, &times
-        );
+        let prediction =
+            PumpFunSimdOptimizations::predict_completion_time_simd(50.0, &volumes, &times);
         assert!(prediction.is_some());
     }
 }

@@ -4,11 +4,11 @@
 //! for web dashboard consumption.
 
 use anyhow::Result;
-use rusqlite::{Connection, params};
+use chrono::Utc;
+use rusqlite::{params, Connection};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use tracing::{info, warn, error};
-use chrono::Utc;
+use tracing::{error, info, warn};
 
 use crate::mev_sandwich_detector::SandwichOpportunity;
 
@@ -49,9 +49,12 @@ impl MevDatabaseTracker {
             params![
                 &opportunity.signature,
                 &opportunity.dex_name,
-                opportunity.pool_address.as_ref().unwrap_or(&"unknown".to_string()),
+                opportunity
+                    .pool_address
+                    .as_ref()
+                    .unwrap_or(&"unknown".to_string()),
                 opportunity.estimated_sol_value,
-                0.0,  // Estimated profit calculated later
+                0.0, // Estimated profit calculated later
                 "detected",
                 opportunity.slot,
                 detection_latency_ms,
@@ -65,11 +68,7 @@ impl MevDatabaseTracker {
     }
 
     /// Log a skipped opportunity
-    pub fn log_skipped(
-        &self,
-        opportunity: &SandwichOpportunity,
-        reason: &str,
-    ) -> Result<()> {
+    pub fn log_skipped(&self, opportunity: &SandwichOpportunity, reason: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap();
 
         conn.execute(
@@ -182,11 +181,7 @@ impl MevDatabaseTracker {
     }
 
     /// Log a failed execution
-    pub fn log_failed(
-        &self,
-        signature: &str,
-        reason: &str,
-    ) -> Result<()> {
+    pub fn log_failed(&self, signature: &str, reason: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap();
 
         conn.execute(
@@ -199,11 +194,7 @@ impl MevDatabaseTracker {
     }
 
     /// Update daily stats for detected opportunity
-    fn update_daily_stats_detected(
-        &self,
-        conn: &Connection,
-        dex_name: &str,
-    ) -> Result<()> {
+    fn update_daily_stats_detected(&self, conn: &Connection, dex_name: &str) -> Result<()> {
         let today = Utc::now().format("%Y-%m-%d").to_string();
 
         // Insert or increment
@@ -223,7 +214,7 @@ impl MevDatabaseTracker {
             "Orca_Whirlpools" => "orca_detected",
             "Meteora_DLMM" => "meteora_detected",
             "PumpSwap" => "pumpswap_detected",
-            _ => return Ok(()),  // Unknown DEX, skip
+            _ => return Ok(()), // Unknown DEX, skip
         };
 
         let sql = format!(
@@ -365,11 +356,13 @@ impl MevDatabaseTracker {
         let conn = self.conn.lock().unwrap();
         let today = Utc::now().format("%Y-%m-%d").to_string();
 
-        let today_detected: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM opportunities WHERE DATE(timestamp) = ?1",
-            params![today],
-            |row| row.get(0),
-        ).unwrap_or(0);
+        let today_detected: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM opportunities WHERE DATE(timestamp) = ?1",
+                params![today],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
 
         let today_executed: i64 = conn.query_row(
             "SELECT COUNT(*) FROM opportunities WHERE DATE(timestamp) = ?1 AND status = 'executed'",

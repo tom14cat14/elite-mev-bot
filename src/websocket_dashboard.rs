@@ -1,4 +1,6 @@
 use anyhow::Result;
+use futures_util::{SinkExt, StreamExt};
+use prometheus::{Counter, Encoder, Gauge, Histogram, HistogramOpts, Registry, TextEncoder};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -6,9 +8,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast;
 use tokio_tungstenite::{accept_async, tungstenite::Message};
-use futures_util::{SinkExt, StreamExt};
-use tracing::{info, warn, error};
-use prometheus::{Encoder, TextEncoder, Registry, Gauge, Counter, Histogram, HistogramOpts};
+use tracing::{error, info, warn};
 
 /// Real-time dashboard metrics for WebSocket streaming
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -110,34 +110,21 @@ impl WebSocketDashboard {
         let latency_histogram = Histogram::with_opts(
             HistogramOpts::new(
                 "mev_bot_latency_seconds",
-                "MEV bot pipeline latency distribution"
-            ).buckets(vec![0.001, 0.005, 0.010, 0.015, 0.025, 0.050, 0.100])
+                "MEV bot pipeline latency distribution",
+            )
+            .buckets(vec![0.001, 0.005, 0.010, 0.015, 0.025, 0.050, 0.100]),
         )?;
 
-        let trades_counter = Counter::new(
-            "mev_bot_trades_total",
-            "Total number of trades executed"
-        )?;
+        let trades_counter =
+            Counter::new("mev_bot_trades_total", "Total number of trades executed")?;
 
-        let profit_gauge = Gauge::new(
-            "mev_bot_profit_sol",
-            "Current total profit in SOL"
-        )?;
+        let profit_gauge = Gauge::new("mev_bot_profit_sol", "Current total profit in SOL")?;
 
-        let cpu_gauge = Gauge::new(
-            "mev_bot_cpu_usage_percent",
-            "Current CPU usage percentage"
-        )?;
+        let cpu_gauge = Gauge::new("mev_bot_cpu_usage_percent", "Current CPU usage percentage")?;
 
-        let memory_gauge = Gauge::new(
-            "mev_bot_memory_usage_mb",
-            "Current memory usage in MB"
-        )?;
+        let memory_gauge = Gauge::new("mev_bot_memory_usage_mb", "Current memory usage in MB")?;
 
-        let error_rate_gauge = Gauge::new(
-            "mev_bot_error_rate",
-            "Current error rate percentage"
-        )?;
+        let error_rate_gauge = Gauge::new("mev_bot_error_rate", "Current error rate percentage")?;
 
         // Register metrics
         registry.register(Box::new(latency_histogram.clone()))?;
@@ -191,7 +178,9 @@ impl WebSocketDashboard {
                 while let Ok((stream, addr)) = listener.accept().await {
                     let clients_clone = Arc::clone(&clients);
                     tokio::spawn(async move {
-                        if let Err(e) = Self::handle_connection(stream, addr.to_string(), clients_clone).await {
+                        if let Err(e) =
+                            Self::handle_connection(stream, addr.to_string(), clients_clone).await
+                        {
                             error!("WebSocket connection error: {}", e);
                         }
                     });
@@ -216,7 +205,10 @@ impl WebSocketDashboard {
 
         let addr = format!("0.0.0.0:{}", port);
         let listener = TcpListener::bind(&addr).await?;
-        info!("📊 Dashboard HTTP server started on http://localhost:{}/dashboard.html", port);
+        info!(
+            "📊 Dashboard HTTP server started on http://localhost:{}/dashboard.html",
+            port
+        );
 
         loop {
             if let Ok((mut stream, _)) = listener.accept().await {
@@ -339,10 +331,22 @@ impl WebSocketDashboard {
             return Ok(());
         } else if request.starts_with("GET /ws") && request.contains("Upgrade: websocket") {
             // This is a WebSocket upgrade request - handle it properly
-            return Self::handle_websocket_upgrade(stream, client_id, clients, &buffer[..bytes_read]).await;
+            return Self::handle_websocket_upgrade(
+                stream,
+                client_id,
+                clients,
+                &buffer[..bytes_read],
+            )
+            .await;
         } else if request.contains("Upgrade: websocket") {
             // Generic WebSocket upgrade request
-            return Self::handle_websocket_upgrade(stream, client_id, clients, &buffer[..bytes_read]).await;
+            return Self::handle_websocket_upgrade(
+                stream,
+                client_id,
+                clients,
+                &buffer[..bytes_read],
+            )
+            .await;
         } else {
             // Unknown request - close connection
             let response = "HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nNot Found";
@@ -630,29 +634,27 @@ impl WebSocketDashboard {
             loop {
                 interval.tick().await;
 
-                let current_metrics = {
-                    metrics.read().unwrap().clone()
-                };
+                let current_metrics = { metrics.read().unwrap().clone() };
 
                 // Update Prometheus metrics
-                prometheus_metrics.latency_histogram.observe(
-                    current_metrics.latency_metrics.total_pipeline_latency_ms / 1000.0
-                );
-                prometheus_metrics.trades_counter.inc_by(
-                    current_metrics.trading_metrics.total_trades as f64
-                );
-                prometheus_metrics.profit_gauge.set(
-                    current_metrics.trading_metrics.total_profit_sol
-                );
-                prometheus_metrics.cpu_gauge.set(
-                    current_metrics.performance_metrics.cpu_usage_percent
-                );
-                prometheus_metrics.memory_gauge.set(
-                    current_metrics.performance_metrics.memory_usage_mb
-                );
-                prometheus_metrics.error_rate_gauge.set(
-                    current_metrics.health_metrics.error_rate
-                );
+                prometheus_metrics
+                    .latency_histogram
+                    .observe(current_metrics.latency_metrics.total_pipeline_latency_ms / 1000.0);
+                prometheus_metrics
+                    .trades_counter
+                    .inc_by(current_metrics.trading_metrics.total_trades as f64);
+                prometheus_metrics
+                    .profit_gauge
+                    .set(current_metrics.trading_metrics.total_profit_sol);
+                prometheus_metrics
+                    .cpu_gauge
+                    .set(current_metrics.performance_metrics.cpu_usage_percent);
+                prometheus_metrics
+                    .memory_gauge
+                    .set(current_metrics.performance_metrics.memory_usage_mb);
+                prometheus_metrics
+                    .error_rate_gauge
+                    .set(current_metrics.health_metrics.error_rate);
 
                 // Broadcast to WebSocket clients
                 let metrics_json = match serde_json::to_string(&serde_json::json!({
@@ -695,7 +697,10 @@ impl WebSocketDashboard {
     /// Create default metrics structure
     fn default_metrics() -> DashboardMetrics {
         DashboardMetrics {
-            timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
+            timestamp: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
             latency_metrics: LatencyMetrics {
                 shredstream_latency_ms: 0.0,
                 detection_latency_ms: 0.0,
@@ -792,9 +797,9 @@ impl LivePerformanceMonitor {
             cpu_usage_percent: self.get_cpu_usage().await,
             memory_usage_mb: self.get_memory_usage().await,
             network_throughput_mbps: self.get_network_throughput().await,
-            cache_hit_rate: 0.0, // Placeholder
+            cache_hit_rate: 0.0,          // Placeholder
             thread_pool_utilization: 0.0, // Placeholder
-            gc_pressure: 0.0, // Placeholder
+            gc_pressure: 0.0,             // Placeholder
         }
     }
 
@@ -861,7 +866,8 @@ impl LivePerformanceMonitor {
         if let Ok(contents) = tokio::fs::read_to_string("/proc/net/dev").await {
             let mut total_bytes = 0u64;
 
-            for line in contents.lines().skip(2) { // Skip header lines
+            for line in contents.lines().skip(2) {
+                // Skip header lines
                 let parts: Vec<&str> = line.split_whitespace().collect();
                 if parts.len() >= 10 {
                     // RX bytes (column 1) + TX bytes (column 9)

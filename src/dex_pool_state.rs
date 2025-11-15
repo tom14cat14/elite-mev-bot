@@ -10,12 +10,12 @@ use std::str::FromStr;
 use tracing::{info, warn};
 
 // Import DEX-specific state modules
-use crate::raydium_pool_state::RaydiumPoolState;
+use crate::meteora_dlmm_state::MeteoraDlmmPoolState;
+use crate::orca_whirlpool_state::OrcaWhirlpoolState;
+use crate::pumpswap_state::PumpSwapBondingCurveState;
 use crate::raydium_clmm_state::RaydiumClmmPoolState;
 use crate::raydium_cpmm_state::RaydiumCpmmPoolState;
-use crate::orca_whirlpool_state::OrcaWhirlpoolState;
-use crate::meteora_dlmm_state::MeteoraDlmmPoolState;
-use crate::pumpswap_state::PumpSwapBondingCurveState;
+use crate::raydium_pool_state::RaydiumPoolState;
 
 /// Supported DEX types (matches mev_sandwich_detector.rs)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -26,7 +26,7 @@ pub enum DexType {
     OrcaWhirlpools,
     MeteoraDlmm,
     PumpSwap,
-    JupiterV6,  // Special handling needed
+    JupiterV6, // Special handling needed
 }
 
 impl DexType {
@@ -128,19 +128,33 @@ pub async fn fetch_pool_state(rpc: &RpcClient, pool_addr: &Pubkey) -> Result<Dex
         .value
         .ok_or_else(|| anyhow!("Pool account not found: {}", pool_addr))?;
 
-    info!("📦 Fetched pool account | Address: {} | Owner: {} | Size: {} bytes",
-          pool_addr, account.owner, account.data.len());
+    info!(
+        "📦 Fetched pool account | Address: {} | Owner: {} | Size: {} bytes",
+        pool_addr,
+        account.owner,
+        account.data.len()
+    );
 
     // CRITICAL FIX: Validate pool account before parsing
     // Reject token accounts, wallets, etc. (owner must be DEX program + size >200 bytes)
     if account.data.len() < 200 {
-        warn!("❌ Account too small to be a pool: {} bytes (min 200)", account.data.len());
-        return Err(anyhow!("Account size {} bytes is too small for a pool (min 200 bytes required)", account.data.len()));
+        warn!(
+            "❌ Account too small to be a pool: {} bytes (min 200)",
+            account.data.len()
+        );
+        return Err(anyhow!(
+            "Account size {} bytes is too small for a pool (min 200 bytes required)",
+            account.data.len()
+        ));
     }
 
     // Determine DEX type from account owner
-    let dex_type = DexType::from_owner(&account.owner)
-        .ok_or_else(|| anyhow!("Unknown DEX program owner: {} (likely a token account or wallet)", account.owner))?;
+    let dex_type = DexType::from_owner(&account.owner).ok_or_else(|| {
+        anyhow!(
+            "Unknown DEX program owner: {} (likely a token account or wallet)",
+            account.owner
+        )
+    })?;
 
     info!("🔍 Identified DEX type: {:?}", dex_type);
 
@@ -181,7 +195,9 @@ pub async fn fetch_pool_state(rpc: &RpcClient, pool_addr: &Pubkey) -> Result<Dex
             // Pool addresses from Jupiter swaps should be the underlying DEX pool
             warn!("⚠️  Jupiter V6 detected - this should not happen");
             warn!("   Jupiter is an aggregator - pool should be from underlying DEX");
-            Err(anyhow!("Jupiter V6: Use underlying DEX pool, not Jupiter program"))
+            Err(anyhow!(
+                "Jupiter V6: Use underlying DEX pool, not Jupiter program"
+            ))
         }
     }
 }
@@ -216,7 +232,9 @@ pub async fn fetch_pool_state_by_dex(
 
         return Err(anyhow!(
             "Pool owner mismatch: expected {:?} ({}), got {}",
-            dex_type, expected_owner, account.owner
+            dex_type,
+            expected_owner,
+            account.owner
         ));
     }
 
@@ -246,9 +264,7 @@ pub async fn fetch_pool_state_by_dex(
             let state = PumpSwapBondingCurveState::parse(pool_addr, &account.data)?;
             Ok(DexPoolState::PumpSwap(state))
         }
-        DexType::JupiterV6 => {
-            Err(anyhow!("Jupiter V6: Use underlying DEX pool"))
-        }
+        DexType::JupiterV6 => Err(anyhow!("Jupiter V6: Use underlying DEX pool")),
     }
 }
 
@@ -259,7 +275,10 @@ mod tests {
     #[test]
     fn test_dex_type_from_owner() {
         let raydium_v4 = Pubkey::from_str("675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8").unwrap();
-        assert_eq!(DexType::from_owner(&raydium_v4), Some(DexType::RaydiumAmmV4));
+        assert_eq!(
+            DexType::from_owner(&raydium_v4),
+            Some(DexType::RaydiumAmmV4)
+        );
 
         let orca = Pubkey::from_str("whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc").unwrap();
         assert_eq!(DexType::from_owner(&orca), Some(DexType::OrcaWhirlpools));
@@ -267,8 +286,14 @@ mod tests {
 
     #[test]
     fn test_dex_type_from_name() {
-        assert_eq!(DexType::from_name("Raydium_AMM_V4"), Some(DexType::RaydiumAmmV4));
-        assert_eq!(DexType::from_name("Orca_Whirlpools"), Some(DexType::OrcaWhirlpools));
+        assert_eq!(
+            DexType::from_name("Raydium_AMM_V4"),
+            Some(DexType::RaydiumAmmV4)
+        );
+        assert_eq!(
+            DexType::from_name("Orca_Whirlpools"),
+            Some(DexType::OrcaWhirlpools)
+        );
         assert_eq!(DexType::from_name("Unknown_DEX"), None);
     }
 }

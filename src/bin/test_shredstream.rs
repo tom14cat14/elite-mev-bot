@@ -1,7 +1,7 @@
 use anyhow::Result;
 use futures::StreamExt;
-use solana_stream_sdk::ShredstreamClient;
 use solana_entry::entry::Entry;
+use solana_stream_sdk::ShredstreamClient;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -23,10 +23,7 @@ async fn main() -> Result<()> {
     println!("\n3. Waiting for first message (30s timeout)...");
     println!("   This will hang if ShredStream isn't sending data");
 
-    match tokio::time::timeout(
-        std::time::Duration::from_secs(30),
-        stream.next()
-    ).await {
+    match tokio::time::timeout(std::time::Duration::from_secs(30), stream.next()).await {
         Ok(Some(Ok(slot_entry))) => {
             println!("   ✅ RECEIVED DATA!");
             println!("   Slot: {}", slot_entry.slot);

@@ -1,11 +1,11 @@
 use anyhow::Result;
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use serde::{Deserialize, Serialize};
-use tracing::{info, warn, error, debug};
-use reqwest::Client;
 use tokio::time::interval;
+use tracing::{debug, error, info, warn};
 
 /// Comprehensive monitoring and alerting system for MEV bot
 #[derive(Debug)]
@@ -279,21 +279,27 @@ impl MonitoringSystem {
 
         // Simple moving average for latency
         let alpha = 0.1;
-        metrics.average_latency_ms = alpha * latency_ms + (1.0 - alpha) * metrics.average_latency_ms;
+        metrics.average_latency_ms =
+            alpha * latency_ms + (1.0 - alpha) * metrics.average_latency_ms;
 
         metrics.last_updated = SystemTime::now();
 
-        debug!("📊 Updated trading metrics - Trades: {}, Win rate: {:.2}%, Avg latency: {:.1}ms",
-               metrics.total_trades, metrics.win_rate * 100.0, metrics.average_latency_ms);
+        debug!(
+            "📊 Updated trading metrics - Trades: {}, Win rate: {:.2}%, Avg latency: {:.1}ms",
+            metrics.total_trades,
+            metrics.win_rate * 100.0,
+            metrics.average_latency_ms
+        );
     }
 
     /// Update system metrics
-    pub fn update_system_metrics(&self,
+    pub fn update_system_metrics(
+        &self,
         cpu_percent: f64,
         memory_mb: f64,
         wallet_balance: f64,
-        connections_ok: bool) {
-
+        connections_ok: bool,
+    ) {
         let mut metrics = self.metrics.lock().unwrap();
         metrics.cpu_usage_percent = cpu_percent;
         metrics.memory_usage_mb = memory_mb;
@@ -361,25 +367,34 @@ impl MonitoringSystem {
 
             // Check cooldown
             if let Some(last_triggered) = rule.last_triggered {
-                if last_triggered.elapsed().unwrap_or(Duration::MAX).as_secs() < (rule.cooldown_minutes as u64 * 60) {
+                if last_triggered.elapsed().unwrap_or(Duration::MAX).as_secs()
+                    < (rule.cooldown_minutes as u64 * 60)
+                {
                     continue;
                 }
             }
 
             let should_trigger = match &rule.condition {
-                AlertCondition::WinRateBelow(threshold) => metrics.win_rate < *threshold && metrics.total_trades > 10,
+                AlertCondition::WinRateBelow(threshold) => {
+                    metrics.win_rate < *threshold && metrics.total_trades > 10
+                }
                 AlertCondition::LatencyAbove(threshold) => metrics.average_latency_ms > *threshold,
                 AlertCondition::ProfitBelow(threshold) => {
                     let total_profit = metrics.total_profit_sol - metrics.total_loss_sol;
                     total_profit < *threshold && metrics.total_trades > 5
-                },
-                AlertCondition::WalletBalanceBelow(threshold) => metrics.wallet_balance_sol < *threshold,
+                }
+                AlertCondition::WalletBalanceBelow(threshold) => {
+                    metrics.wallet_balance_sol < *threshold
+                }
                 AlertCondition::ErrorRateAbove(threshold) => {
-                    let error_rate = metrics.failed_trades as f64 / metrics.total_trades.max(1) as f64;
+                    let error_rate =
+                        metrics.failed_trades as f64 / metrics.total_trades.max(1) as f64;
                     error_rate > *threshold
-                },
+                }
                 AlertCondition::CircuitBreakerTripped => metrics.circuit_breaker_trips > 0,
-                AlertCondition::ConnectionLost(_) => !metrics.rpc_connection_status || !metrics.shredstream_connection_status,
+                AlertCondition::ConnectionLost(_) => {
+                    !metrics.rpc_connection_status || !metrics.shredstream_connection_status
+                }
                 AlertCondition::Custom(_, _) => false, // Not implemented
             };
 
@@ -395,16 +410,29 @@ impl MonitoringSystem {
 
     /// Create alert from rule and current metrics
     async fn create_alert(&self, rule: &AlertRule, metrics: &SystemMetrics) -> Alert {
-        let alert_id = format!("{}_{}", rule.id,
-            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs());
+        let alert_id = format!(
+            "{}_{}",
+            rule.id,
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs()
+        );
 
         let description = match &rule.condition {
-            AlertCondition::WinRateBelow(threshold) =>
-                format!("Win rate {:.2}% is below threshold {:.2}%", metrics.win_rate * 100.0, threshold * 100.0),
-            AlertCondition::LatencyAbove(threshold) =>
-                format!("Average latency {:.1}ms is above threshold {:.1}ms", metrics.average_latency_ms, threshold),
-            AlertCondition::WalletBalanceBelow(threshold) =>
-                format!("Wallet balance {:.6} SOL is below threshold {:.6} SOL", metrics.wallet_balance_sol, threshold),
+            AlertCondition::WinRateBelow(threshold) => format!(
+                "Win rate {:.2}% is below threshold {:.2}%",
+                metrics.win_rate * 100.0,
+                threshold * 100.0
+            ),
+            AlertCondition::LatencyAbove(threshold) => format!(
+                "Average latency {:.1}ms is above threshold {:.1}ms",
+                metrics.average_latency_ms, threshold
+            ),
+            AlertCondition::WalletBalanceBelow(threshold) => format!(
+                "Wallet balance {:.6} SOL is below threshold {:.6} SOL",
+                metrics.wallet_balance_sol, threshold
+            ),
             _ => "Alert condition triggered".to_string(),
         };
 
@@ -422,7 +450,10 @@ impl MonitoringSystem {
 
     /// Send alert through all configured channels
     async fn send_alert(&self, alert: &Alert) -> Result<()> {
-        info!("🚨 Triggering alert: {} - {}", alert.title, alert.description);
+        info!(
+            "🚨 Triggering alert: {} - {}",
+            alert.title, alert.description
+        );
 
         // Store active alert
         {
@@ -478,7 +509,8 @@ impl MonitoringSystem {
             }
         });
 
-        let response = self.http_client
+        let response = self
+            .http_client
             .post(&client.api_endpoint)
             .header("Content-Type", "application/json")
             .json(&payload)
@@ -488,7 +520,10 @@ impl MonitoringSystem {
         if response.status().is_success() {
             info!("✅ PagerDuty alert sent successfully");
         } else {
-            warn!("⚠️  PagerDuty alert failed with status: {}", response.status());
+            warn!(
+                "⚠️  PagerDuty alert failed with status: {}",
+                response.status()
+            );
         }
 
         Ok(())
@@ -532,7 +567,8 @@ impl MonitoringSystem {
             }]
         });
 
-        let response = self.http_client
+        let response = self
+            .http_client
             .post(webhook)
             .header("Content-Type", "application/json")
             .json(&payload)
@@ -579,7 +615,8 @@ impl MonitoringSystem {
             }]
         });
 
-        let response = self.http_client
+        let response = self
+            .http_client
             .post(webhook)
             .header("Content-Type", "application/json")
             .json(&payload)
@@ -608,7 +645,11 @@ impl MonitoringSystem {
     }
 
     /// Export metrics to Prometheus
-    async fn export_to_prometheus(&self, client: &PrometheusClient, metrics: &SystemMetrics) -> Result<()> {
+    async fn export_to_prometheus(
+        &self,
+        client: &PrometheusClient,
+        metrics: &SystemMetrics,
+    ) -> Result<()> {
         let prometheus_metrics = format!(
             "# HELP mev_bot_trades_total Total number of trades executed\n\
              # TYPE mev_bot_trades_total counter\n\
@@ -622,15 +663,26 @@ impl MonitoringSystem {
              # HELP mev_bot_wallet_balance_sol Wallet balance in SOL\n\
              # TYPE mev_bot_wallet_balance_sol gauge\n\
              mev_bot_wallet_balance_sol{{job=\"{}\",instance=\"{}\"}} {}\n",
-            client.job_name, client.instance, metrics.total_trades,
-            client.job_name, client.instance, metrics.win_rate,
-            client.job_name, client.instance, metrics.average_latency_ms,
-            client.job_name, client.instance, metrics.wallet_balance_sol
+            client.job_name,
+            client.instance,
+            metrics.total_trades,
+            client.job_name,
+            client.instance,
+            metrics.win_rate,
+            client.job_name,
+            client.instance,
+            metrics.average_latency_ms,
+            client.job_name,
+            client.instance,
+            metrics.wallet_balance_sol
         );
 
-        let response = self.http_client
-            .post(&format!("{}/metrics/job/{}/instance/{}",
-                  client.endpoint, client.job_name, client.instance))
+        let response = self
+            .http_client
+            .post(&format!(
+                "{}/metrics/job/{}/instance/{}",
+                client.endpoint, client.job_name, client.instance
+            ))
             .header("Content-Type", "text/plain")
             .body(prometheus_metrics)
             .send()
@@ -650,7 +702,12 @@ impl MonitoringSystem {
 
     /// Get active alerts
     pub fn get_active_alerts(&self) -> Vec<Alert> {
-        self.active_alerts.lock().unwrap().values().cloned().collect()
+        self.active_alerts
+            .lock()
+            .unwrap()
+            .values()
+            .cloned()
+            .collect()
     }
 }
 

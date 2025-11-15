@@ -1,18 +1,15 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use solana_sdk::{
-    instruction::Instruction,
-    signature::Signer,
-};
+use solana_sdk::{instruction::Instruction, signature::Signer};
 use std::collections::HashMap;
 use std::time::Instant;
-use tracing::{debug, info, error};
+use tracing::{debug, error, info};
 
 use crate::dex_registry::DexRegistry;
 use crate::dynamic_fee_model::DynamicFeeModel;
-use crate::jupiter_executor::JupiterExecutor;
 use crate::jito_bundle_manager::JitoBundleManager;
+use crate::jupiter_executor::JupiterExecutor;
 use crate::wallet_manager::WalletManager;
 
 /// High-performance liquidation engine for DeFi protocols
@@ -112,49 +109,58 @@ impl ProtocolRegistry {
         let mut protocols = HashMap::new();
 
         // Solend (most popular Solana lending protocol)
-        protocols.insert("solend".to_string(), ProtocolInfo {
-            name: "Solend".to_string(),
-            program_id: "So1endDq2YkqhipRh3WViPa8hdiSpxWy6z3Z6tMCpAo".to_string(),
-            liquidation_threshold: 0.85, // 85% LTV
-            liquidation_bonus: 0.05, // 5% bonus
-            min_collateral_value: 100.0, // $100 minimum
-            supported_assets: vec![
-                "So11111111111111111111111111111111111111112".to_string(), // SOL
-                "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(), // USDC
-                "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB".to_string(), // USDT
-            ],
-            oracle_program_id: "FsJ3A3u2vn5cTVofAjvy6y5kwABJAqYWpe4975bi2epH".to_string(), // Pyth
-        });
+        protocols.insert(
+            "solend".to_string(),
+            ProtocolInfo {
+                name: "Solend".to_string(),
+                program_id: "So1endDq2YkqhipRh3WViPa8hdiSpxWy6z3Z6tMCpAo".to_string(),
+                liquidation_threshold: 0.85, // 85% LTV
+                liquidation_bonus: 0.05,     // 5% bonus
+                min_collateral_value: 100.0, // $100 minimum
+                supported_assets: vec![
+                    "So11111111111111111111111111111111111111112".to_string(), // SOL
+                    "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(), // USDC
+                    "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB".to_string(), // USDT
+                ],
+                oracle_program_id: "FsJ3A3u2vn5cTVofAjvy6y5kwABJAqYWpe4975bi2epH".to_string(), // Pyth
+            },
+        );
 
         // Marginfi
-        protocols.insert("marginfi".to_string(), ProtocolInfo {
-            name: "MarginFi".to_string(),
-            program_id: "MFv2hWf31Z9kbCa1snEPYctwafyhdvnV7FZnsebVacA".to_string(),
-            liquidation_threshold: 0.80, // 80% LTV
-            liquidation_bonus: 0.06, // 6% bonus
-            min_collateral_value: 50.0, // $50 minimum
-            supported_assets: vec![
-                "So11111111111111111111111111111111111111112".to_string(), // SOL
-                "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(), // USDC
-                "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So".to_string(), // mSOL
-            ],
-            oracle_program_id: "FsJ3A3u2vn5cTVofAjvy6y5kwABJAqYWpe4975bi2epH".to_string(), // Pyth
-        });
+        protocols.insert(
+            "marginfi".to_string(),
+            ProtocolInfo {
+                name: "MarginFi".to_string(),
+                program_id: "MFv2hWf31Z9kbCa1snEPYctwafyhdvnV7FZnsebVacA".to_string(),
+                liquidation_threshold: 0.80, // 80% LTV
+                liquidation_bonus: 0.06,     // 6% bonus
+                min_collateral_value: 50.0,  // $50 minimum
+                supported_assets: vec![
+                    "So11111111111111111111111111111111111111112".to_string(), // SOL
+                    "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(), // USDC
+                    "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So".to_string(), // mSOL
+                ],
+                oracle_program_id: "FsJ3A3u2vn5cTVofAjvy6y5kwABJAqYWpe4975bi2epH".to_string(), // Pyth
+            },
+        );
 
         // Kamino Finance
-        protocols.insert("kamino".to_string(), ProtocolInfo {
-            name: "Kamino".to_string(),
-            program_id: "KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD".to_string(),
-            liquidation_threshold: 0.82, // 82% LTV
-            liquidation_bonus: 0.04, // 4% bonus
-            min_collateral_value: 75.0, // $75 minimum
-            supported_assets: vec![
-                "So11111111111111111111111111111111111111112".to_string(), // SOL
-                "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(), // USDC
-                "7dHbWXmci3dT8UFYWYZweBLXgycu7Y3iL6trKn1Y7ARj".to_string(), // stSOL
-            ],
-            oracle_program_id: "FsJ3A3u2vn5cTVofAjvy6y5kwABJAqYWpe4975bi2epH".to_string(), // Pyth
-        });
+        protocols.insert(
+            "kamino".to_string(),
+            ProtocolInfo {
+                name: "Kamino".to_string(),
+                program_id: "KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD".to_string(),
+                liquidation_threshold: 0.82, // 82% LTV
+                liquidation_bonus: 0.04,     // 4% bonus
+                min_collateral_value: 75.0,  // $75 minimum
+                supported_assets: vec![
+                    "So11111111111111111111111111111111111111112".to_string(), // SOL
+                    "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(), // USDC
+                    "7dHbWXmci3dT8UFYWYZweBLXgycu7Y3iL6trKn1Y7ARj".to_string(), // stSOL
+                ],
+                oracle_program_id: "FsJ3A3u2vn5cTVofAjvy6y5kwABJAqYWpe4975bi2epH".to_string(), // Pyth
+            },
+        );
 
         Self { protocols }
     }
@@ -208,17 +214,22 @@ impl LiquidationEngine {
             opportunities.extend(protocol_opportunities);
         }
 
-        info!("🔍 Scanned {} positions across {} protocols, found {} liquidation opportunities",
-              self.stats.positions_monitored,
-              self.protocol_registry.protocols.len(),
-              opportunities.len());
+        info!(
+            "🔍 Scanned {} positions across {} protocols, found {} liquidation opportunities",
+            self.stats.positions_monitored,
+            self.protocol_registry.protocols.len(),
+            opportunities.len()
+        );
 
         self.stats.opportunities_detected += opportunities.len() as u64;
         Ok(opportunities)
     }
 
     /// Scan specific protocol for liquidatable positions
-    async fn scan_protocol_positions(&mut self, protocol: &ProtocolInfo) -> Result<Vec<LiquidationOpportunity>> {
+    async fn scan_protocol_positions(
+        &mut self,
+        protocol: &ProtocolInfo,
+    ) -> Result<Vec<LiquidationOpportunity>> {
         let mut opportunities = Vec::new();
 
         // In production, this would query the protocol's on-chain state
@@ -230,13 +241,17 @@ impl LiquidationEngine {
 
             // Check if position is liquidatable
             if position.health_factor < 1.0 {
-                if let Some(opportunity) = self.analyze_liquidation_opportunity(position.clone(), protocol).await? {
+                if let Some(opportunity) = self
+                    .analyze_liquidation_opportunity(position.clone(), protocol)
+                    .await?
+                {
                     opportunities.push(opportunity);
                 }
             }
 
             // Cache position for future monitoring
-            self.position_cache.insert(position.position_id.clone(), position);
+            self.position_cache
+                .insert(position.position_id.clone(), position);
         }
 
         Ok(opportunities)
@@ -265,7 +280,7 @@ impl LiquidationEngine {
                 user_wallet: format!("User{}Wallet{}", protocol.name, i),
                 protocol_name: protocol.name.clone(),
                 collateral_mint: protocol.supported_assets[0].clone(), // SOL
-                debt_mint: protocol.supported_assets[1].clone(), // USDC
+                debt_mint: protocol.supported_assets[1].clone(),       // USDC
                 collateral_amount: (collateral_value * 1_000_000_000.0 / 150.0) as u64, // Assume $150/SOL
                 debt_amount: (debt_value * 1_000_000.0) as u64, // USDC has 6 decimals
                 collateral_value_usd: collateral_value,
@@ -289,15 +304,19 @@ impl LiquidationEngine {
         let max_liquidatable_debt = position.debt_amount / 2;
 
         // Calculate collateral to receive (debt + bonus)
-        let collateral_to_receive = (max_liquidatable_debt as f64 * (1.0 + protocol.liquidation_bonus)) as u64;
+        let collateral_to_receive =
+            (max_liquidatable_debt as f64 * (1.0 + protocol.liquidation_bonus)) as u64;
 
         // Check if we have enough balance to repay debt
         let balance_info = self.wallet_manager.get_balance_info().await?;
         let required_usdc = max_liquidatable_debt as f64 / 1_000_000.0; // Convert to USDC
 
-        if required_usdc > balance_info.sol_balance * 0.8 { // Use SOL balance as proxy
-            debug!("Insufficient balance for liquidation: need ${:.2} USDC, have {:.2} SOL",
-                   required_usdc, balance_info.sol_balance);
+        if required_usdc > balance_info.sol_balance * 0.8 {
+            // Use SOL balance as proxy
+            debug!(
+                "Insufficient balance for liquidation: need ${:.2} USDC, have {:.2} SOL",
+                required_usdc, balance_info.sol_balance
+            );
             return Ok(None);
         }
 
@@ -314,8 +333,10 @@ impl LiquidationEngine {
 
         // Check profitability threshold
         if net_profit_sol < self.min_profit_sol {
-            debug!("Liquidation below profit threshold: {:.4} SOL < {:.4} SOL minimum",
-                   net_profit_sol, self.min_profit_sol);
+            debug!(
+                "Liquidation below profit threshold: {:.4} SOL < {:.4} SOL minimum",
+                net_profit_sol, self.min_profit_sol
+            );
             return Ok(None);
         }
 
@@ -344,7 +365,8 @@ impl LiquidationEngine {
             },
             estimated_profit_sol: fee_calculation.net_profit_sol,
             confidence_score,
-            execution_priority: self.calculate_liquidation_priority(fee_calculation.net_profit_sol, health_factor),
+            execution_priority: self
+                .calculate_liquidation_priority(fee_calculation.net_profit_sol, health_factor),
             detected_at: now,
             expires_at: now + chrono::Duration::minutes(2), // Liquidations are time-sensitive
         }))
@@ -359,21 +381,29 @@ impl LiquidationEngine {
         let start_time = Instant::now();
         let opportunity_id = opportunity.opportunity_id.clone();
 
-        info!("💧 Executing liquidation: {} (health factor: {:.3})",
-              opportunity_id, opportunity.position.health_factor);
+        info!(
+            "💧 Executing liquidation: {} (health factor: {:.3})",
+            opportunity_id, opportunity.position.health_factor
+        );
 
         // Build liquidation instructions
         let liquidation_instructions = self.build_liquidation_instructions(&opportunity).await?;
 
         // Create atomic bundle for liquidation
-        let bundle = self.bundle_manager.create_liquidation_bundle(
-            liquidation_instructions,
-            self.wallet_manager.get_main_keypair(),
-            recent_blockhash,
-        ).await?;
+        let bundle = self
+            .bundle_manager
+            .create_liquidation_bundle(
+                liquidation_instructions,
+                self.wallet_manager.get_main_keypair(),
+                recent_blockhash,
+            )
+            .await?;
 
-        info!("📦 Liquidation bundle created in {}ms: {}",
-              start_time.elapsed().as_millis(), bundle.bundle_id);
+        info!(
+            "📦 Liquidation bundle created in {}ms: {}",
+            start_time.elapsed().as_millis(),
+            bundle.bundle_id
+        );
 
         // Submit bundle to Jito
         match self.bundle_manager.submit_bundle(&bundle).await {
@@ -384,11 +414,15 @@ impl LiquidationEngine {
 
                 // Update average execution time
                 let total_executions = self.stats.opportunities_executed as f64;
-                self.stats.average_execution_time_ms =
-                    (self.stats.average_execution_time_ms * (total_executions - 1.0) + execution_time as f64) / total_executions;
+                self.stats.average_execution_time_ms = (self.stats.average_execution_time_ms
+                    * (total_executions - 1.0)
+                    + execution_time as f64)
+                    / total_executions;
 
-                info!("✅ Liquidation executed successfully in {}ms: {} -> Jito: {}",
-                      execution_time, opportunity_id, jito_bundle_id);
+                info!(
+                    "✅ Liquidation executed successfully in {}ms: {} -> Jito: {}",
+                    execution_time, opportunity_id, jito_bundle_id
+                );
 
                 Ok(LiquidationExecution {
                     opportunity_id,
@@ -406,8 +440,10 @@ impl LiquidationEngine {
                 let execution_time = start_time.elapsed().as_millis() as u64;
                 self.stats.failed_executions += 1;
 
-                error!("❌ Liquidation execution failed in {}ms: {} - {}",
-                       execution_time, opportunity_id, e);
+                error!(
+                    "❌ Liquidation execution failed in {}ms: {} - {}",
+                    execution_time, opportunity_id, e
+                );
 
                 Ok(LiquidationExecution {
                     opportunity_id,
@@ -425,31 +461,44 @@ impl LiquidationEngine {
     }
 
     /// Build liquidation instructions for the specific protocol
-    async fn build_liquidation_instructions(&self, opportunity: &LiquidationOpportunity) -> Result<Vec<Instruction>> {
+    async fn build_liquidation_instructions(
+        &self,
+        opportunity: &LiquidationOpportunity,
+    ) -> Result<Vec<Instruction>> {
         // In production, this would build actual protocol-specific liquidation instructions
         // For testing, return simplified instructions
-        Ok(vec![
-            solana_sdk::system_instruction::transfer(
-                &self.wallet_manager.get_main_keypair().pubkey(),
-                &self.wallet_manager.get_main_keypair().pubkey(),
-                opportunity.liquidation_params.repay_amount,
-            ),
-        ])
+        Ok(vec![solana_sdk::system_instruction::transfer(
+            &self.wallet_manager.get_main_keypair().pubkey(),
+            &self.wallet_manager.get_main_keypair().pubkey(),
+            opportunity.liquidation_params.repay_amount,
+        )])
     }
 
     /// Calculate confidence score for liquidation opportunity
-    fn calculate_liquidation_confidence(&self, position: &LiquidatablePosition, protocol: &ProtocolInfo) -> f64 {
+    fn calculate_liquidation_confidence(
+        &self,
+        position: &LiquidatablePosition,
+        protocol: &ProtocolInfo,
+    ) -> f64 {
         let mut score: f64 = 0.8; // Base confidence
 
         // Higher confidence for more underwater positions
-        if position.health_factor < 0.90 { score += 0.1; }
-        if position.health_factor < 0.85 { score += 0.1; }
+        if position.health_factor < 0.90 {
+            score += 0.1;
+        }
+        if position.health_factor < 0.85 {
+            score += 0.1;
+        }
 
         // Higher confidence for larger positions
-        if position.collateral_value_usd > 5000.0 { score += 0.05; }
+        if position.collateral_value_usd > 5000.0 {
+            score += 0.05;
+        }
 
         // Higher confidence for established protocols
-        if protocol.name == "Solend" || protocol.name == "MarginFi" { score += 0.05; }
+        if protocol.name == "Solend" || protocol.name == "MarginFi" {
+            score += 0.05;
+        }
 
         score.min(1.0).max(0.1)
     }
@@ -473,7 +522,8 @@ impl LiquidationEngine {
     /// Clean up old cached positions
     pub fn cleanup_old_positions(&mut self) {
         let cutoff = Utc::now() - chrono::Duration::minutes(10);
-        self.position_cache.retain(|_, position| position.last_updated > cutoff);
+        self.position_cache
+            .retain(|_, position| position.last_updated > cutoff);
     }
 
     /// Get liquidation engine statistics
@@ -486,7 +536,8 @@ impl LiquidationEngine {
         if self.stats.opportunities_detected == 0 {
             0.0
         } else {
-            (self.stats.opportunities_executed as f64 / self.stats.opportunities_detected as f64) * 100.0
+            (self.stats.opportunities_executed as f64 / self.stats.opportunities_detected as f64)
+                * 100.0
         }
     }
 

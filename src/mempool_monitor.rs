@@ -1,16 +1,12 @@
 use anyhow::Result;
+use bincode;
 use chrono::{DateTime, Utc};
 use futures::StreamExt;
 use serde::Serialize;
 use serde_json::Value;
-use solana_stream_sdk::{CommitmentLevel, ShredstreamClient};
-use solana_sdk::{
-    pubkey::Pubkey,
-    signature::Signature,
-    transaction::VersionedTransaction,
-};
 use solana_entry::entry::Entry;
-use bincode;
+use solana_sdk::{pubkey::Pubkey, signature::Signature, transaction::VersionedTransaction};
+use solana_stream_sdk::{CommitmentLevel, ShredstreamClient};
 use std::time::Instant;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
@@ -24,11 +20,11 @@ pub struct StreamData {
     pub slot: u64,
     pub timestamp: std::time::Instant,
 }
-use crate::sandwich_engine::SandwichEngine;
-use crate::liquidation_engine::LiquidationEngine;
 use crate::database_tracker::DatabaseTracker;
 use crate::dex_registry::DexRegistry;
+use crate::liquidation_engine::LiquidationEngine;
 use crate::microcap_filter::MicroCapFilter;
+use crate::sandwich_engine::SandwichEngine;
 
 /// PumpFun program ID for pre-migration token filtering
 const PUMPFUN_PROGRAM_ID: &str = "PumpFunP4PfMpqd7KsAEL7NKPhpq6M4yDmMRr2tH6gN";
@@ -138,8 +134,10 @@ impl MempoolMonitor {
         // Add timeout and proper error handling for ShredStream connection
         let shredstream_client = match tokio::time::timeout(
             std::time::Duration::from_secs(10), // 10 second timeout
-            ShredstreamClient::connect(&shredstream_endpoint)
-        ).await {
+            ShredstreamClient::connect(&shredstream_endpoint),
+        )
+        .await
+        {
             Ok(Ok(client)) => {
                 info!("✅ ShredStream connection successful");
                 Some(client)
@@ -161,7 +159,7 @@ impl MempoolMonitor {
             jupiter_api_key.clone(),
             jito_endpoint.clone(),
             rpc_url.clone(),
-            0.1, // 0.1 SOL minimum profit
+            0.1,  // 0.1 SOL minimum profit
             10.0, // 10 SOL max position
         )?;
 
@@ -171,7 +169,7 @@ impl MempoolMonitor {
             jito_endpoint.clone(),
             rpc_url.clone(),
             0.05, // 0.05 SOL minimum profit (lower threshold)
-            5.0, // 5 SOL max position
+            5.0,  // 5 SOL max position
         )?;
 
         info!("💧 Initializing liquidation engine...");
@@ -184,7 +182,7 @@ impl MempoolMonitor {
         )?;
 
         info!("📊 Initializing database tracker...");
-        let database_tracker = DatabaseTracker::new(crate::database_tracker::DatabaseConfig::default());
+        let database_tracker = DatabaseTracker::new("data/mev_tracking.db")?;
 
         // Initialize micro-cap filter if enabled
         let microcap_filter = if config.enable_microcap_filter {
@@ -192,7 +190,10 @@ impl MempoolMonitor {
 
             let filter = if let Some(max_cap) = config.max_market_cap_usd {
                 if max_cap <= 100_000.0 {
-                    info!("  • Pre-migration mode: MAX ${:.0}K market cap", max_cap / 1000.0);
+                    info!(
+                        "  • Pre-migration mode: MAX ${:.0}K market cap",
+                        max_cap / 1000.0
+                    );
                     MicroCapFilter::new_premigration()
                 } else {
                     info!("  • Custom market cap limit: ${:.0}K", max_cap / 1000.0);
@@ -204,8 +205,22 @@ impl MempoolMonitor {
             };
 
             info!("  • Pre-migration detection: ENABLED");
-            info!("  • Min liquidity: {:.1} SOL", if config.max_market_cap_usd.unwrap_or(1_000_000.0) <= 100_000.0 { 1.0 } else { 2.0 });
-            info!("  • Target impact: {}%+", if config.max_market_cap_usd.unwrap_or(1_000_000.0) <= 100_000.0 { 5.0 } else { 3.0 });
+            info!(
+                "  • Min liquidity: {:.1} SOL",
+                if config.max_market_cap_usd.unwrap_or(1_000_000.0) <= 100_000.0 {
+                    1.0
+                } else {
+                    2.0
+                }
+            );
+            info!(
+                "  • Target impact: {}%+",
+                if config.max_market_cap_usd.unwrap_or(1_000_000.0) <= 100_000.0 {
+                    5.0
+                } else {
+                    3.0
+                }
+            );
             Some(filter)
         } else {
             None
@@ -225,14 +240,23 @@ impl MempoolMonitor {
 
         info!("✅ Mempool monitor initialized successfully");
         info!("  📊 Monitoring configuration:");
-        info!("    • Sandwich attacks: {}", monitor.config.enable_sandwich_attacks);
+        info!(
+            "    • Sandwich attacks: {}",
+            monitor.config.enable_sandwich_attacks
+        );
         info!("    • Arbitrage: {}", monitor.config.enable_arbitrage);
         info!("    • Liquidations: {}", monitor.config.enable_liquidations);
-        info!("    • Micro-cap filter: {}", monitor.config.enable_microcap_filter);
+        info!(
+            "    • Micro-cap filter: {}",
+            monitor.config.enable_microcap_filter
+        );
         if let Some(max_cap) = monitor.config.max_market_cap_usd {
             info!("    • Market cap limit: ${:.0}K", max_cap / 1000.0);
         }
-        info!("    • Max concurrent opportunities: {}", monitor.config.max_concurrent_opportunities);
+        info!(
+            "    • Max concurrent opportunities: {}",
+            monitor.config.max_concurrent_opportunities
+        );
 
         Ok(monitor)
     }
@@ -253,7 +277,7 @@ impl MempoolMonitor {
                 commitment: Some(CommitmentLevel::Confirmed as i32),
                 accounts: std::collections::HashMap::new(), // Subscribe to all accounts
                 transactions: std::collections::HashMap::new(), // Subscribe to all transactions
-                slots: std::collections::HashMap::new(), // Subscribe to all slots
+                slots: std::collections::HashMap::new(),    // Subscribe to all slots
             };
             Some(client.subscribe_entries(request).await?)
         } else {
@@ -329,11 +353,18 @@ impl MempoolMonitor {
         let entries: Vec<Entry> = bincode::deserialize(&entry_message.entries)
             .map_err(|e| anyhow::anyhow!("Failed to deserialize entries: {}", e))?;
 
-        debug!("Processing slot {} with {} entries", entry_message.slot, entries.len());
+        debug!(
+            "Processing slot {} with {} entries",
+            entry_message.slot,
+            entries.len()
+        );
 
         // Process each entry and its transactions
         for entry in entries {
-            debug!("Processing entry with {} transactions", entry.transactions.len());
+            debug!(
+                "Processing entry with {} transactions",
+                entry.transactions.len()
+            );
 
             // Process each transaction in the entry
             for transaction in &entry.transactions {
@@ -341,7 +372,10 @@ impl MempoolMonitor {
 
                 // Extract and process DEX swap data for immediate price updates
                 if self.config.enable_arbitrage {
-                    if let Err(e) = self.extract_and_update_dex_prices_from_transaction(transaction).await {
+                    if let Err(e) = self
+                        .extract_and_update_dex_prices_from_transaction(transaction)
+                        .await
+                    {
                         debug!("Failed to extract DEX prices from transaction: {}", e);
                     }
                 }
@@ -349,13 +383,18 @@ impl MempoolMonitor {
                 // Check for sandwich opportunities (if enabled)
                 if self.config.enable_sandwich_attacks {
                     // STEP 1: Early PumpFun filtering - Check if transaction involves PumpFun program
-                    let has_pumpfun_instruction = transaction.message.instructions().iter().any(|ix| {
-                        if let Some(program_id) = transaction.message.static_account_keys().get(ix.program_id_index as usize) {
-                            program_id.to_string() == PUMPFUN_PROGRAM_ID
-                        } else {
-                            false
-                        }
-                    });
+                    let has_pumpfun_instruction =
+                        transaction.message.instructions().iter().any(|ix| {
+                            if let Some(program_id) = transaction
+                                .message
+                                .static_account_keys()
+                                .get(ix.program_id_index as usize)
+                            {
+                                program_id.to_string() == PUMPFUN_PROGRAM_ID
+                            } else {
+                                false
+                            }
+                        });
 
                     if !has_pumpfun_instruction {
                         debug!("Transaction filtered out: Not a PumpFun transaction");
@@ -376,26 +415,32 @@ impl MempoolMonitor {
                         "pumpfun_transaction": true // Mark as PumpFun for downstream processing
                     });
 
-                    if let Ok(Some(opportunity)) = self.sandwich_engine.analyze_transaction(
-                        &tx_json,
-                        entry.hash,
-                    ).await {
+                    if let Ok(Some(opportunity)) = self
+                        .sandwich_engine
+                        .analyze_transaction(&tx_json, entry.hash)
+                        .await
+                    {
                         self.stats.opportunities_detected += 1;
 
                         // Apply micro-cap filtering if enabled (with early filtering optimization)
-                        let should_process = if let Some(ref microcap_filter) = self.microcap_filter {
+                        let should_process = if let Some(ref microcap_filter) = self.microcap_filter
+                        {
                             // STEP 1: Early filter - Quick market cap check (saves 70-80% processing)
-                            if let Ok(passes_early_filter) = microcap_filter.quick_market_cap_filter(&tx_json) {
+                            if let Ok(passes_early_filter) =
+                                microcap_filter.quick_market_cap_filter(&tx_json)
+                            {
                                 if !passes_early_filter {
                                     debug!("Transaction filtered out early: Market cap > $90K (PumpFun pre-migration limit)");
                                     false // Early filter rejection - save processing
                                 } else {
                                     // STEP 2: Full analysis for tokens that pass early filter
-                                    if let Ok(Some(microcap_opportunity)) = microcap_filter.analyze_token(&tx_json).await {
+                                    if let Ok(Some(microcap_opportunity)) =
+                                        microcap_filter.analyze_token(&tx_json).await
+                                    {
                                         // Get adaptive parameters based on token characteristics
                                         let adaptive_params = microcap_filter.get_adaptive_params(
                                             microcap_opportunity.market_cap_usd,
-                                            microcap_opportunity.is_premigration
+                                            microcap_opportunity.is_premigration,
                                         );
 
                                         let token_type = if microcap_opportunity.is_premigration {
@@ -416,7 +461,9 @@ impl MempoolMonitor {
 
                                         true // Pass full filter with adaptive parameters
                                     } else {
-                                        debug!("Transaction filtered out by full micro-cap analysis");
+                                        debug!(
+                                            "Transaction filtered out by full micro-cap analysis"
+                                        );
                                         false // Full filter rejection
                                     }
                                 }
@@ -470,7 +517,8 @@ impl MempoolMonitor {
         let processing_time = processing_start.elapsed().as_millis() as f64;
         let total_processed = self.stats.transactions_processed as f64;
         self.stats.average_processing_time_ms =
-            (self.stats.average_processing_time_ms * (total_processed - 1.0) + processing_time) / total_processed;
+            (self.stats.average_processing_time_ms * (total_processed - 1.0) + processing_time)
+                / total_processed;
 
         self.stats.last_activity = Some(Utc::now());
 
@@ -478,22 +526,29 @@ impl MempoolMonitor {
     }
 
     /// Extract and update DEX price data from real Solana transaction
-    async fn extract_and_update_dex_prices_from_transaction(&mut self, transaction: &VersionedTransaction) -> Result<()> {
+    async fn extract_and_update_dex_prices_from_transaction(
+        &mut self,
+        transaction: &VersionedTransaction,
+    ) -> Result<()> {
         // Parse transaction instructions to find DEX swaps
         let account_keys = transaction.message.static_account_keys();
         for instruction in transaction.message.instructions() {
             // Get the program ID for this instruction
-            let program_id = account_keys.get(instruction.program_id_index as usize)
+            let program_id = account_keys
+                .get(instruction.program_id_index as usize)
                 .ok_or_else(|| anyhow::anyhow!("Invalid program_id_index"))?;
 
             // Check if this is a known DEX program
             if let Some(dex_info) = self.dex_registry.get_dex_by_program_id(program_id) {
                 // Extract price data from DEX-specific instruction
-                if let Some(price_data) = self.extract_dex_swap_price_from_instruction(
-                    instruction,
-                    &dex_info.name,
-                    account_keys
-                ).await? {
+                if let Some(price_data) = self
+                    .extract_dex_swap_price_from_instruction(
+                        instruction,
+                        &dex_info.name,
+                        account_keys,
+                    )
+                    .await?
+                {
                     // Update arbitrage engine with real-time price data
                     self.arbitrage_engine.update_price_data(
                         &price_data.token_mint,
@@ -502,8 +557,13 @@ impl MempoolMonitor {
                         price_data.liquidity,
                     );
 
-                    debug!("📊 Updated {} price on {}: {:.6} SOL (liquidity: {})",
-                        price_data.token_mint, dex_info.name, price_data.price, price_data.liquidity);
+                    debug!(
+                        "📊 Updated {} price on {}: {:.6} SOL (liquidity: {})",
+                        price_data.token_mint,
+                        dex_info.name,
+                        price_data.price,
+                        price_data.liquidity
+                    );
                 }
             }
         }
@@ -522,10 +582,19 @@ impl MempoolMonitor {
         // For now, let's implement basic structure that can be expanded
 
         match dex_name {
-            "Raydium" => self.parse_raydium_instruction(instruction, account_keys).await,
+            "Raydium" => {
+                self.parse_raydium_instruction(instruction, account_keys)
+                    .await
+            }
             "Orca" => self.parse_orca_instruction(instruction, account_keys).await,
-            "Jupiter" => self.parse_jupiter_instruction(instruction, account_keys).await,
-            "Meteora" => self.parse_meteora_instruction(instruction, account_keys).await,
+            "Jupiter" => {
+                self.parse_jupiter_instruction(instruction, account_keys)
+                    .await
+            }
+            "Meteora" => {
+                self.parse_meteora_instruction(instruction, account_keys)
+                    .await
+            }
             _ => {
                 debug!("Unknown DEX for instruction parsing: {}", dex_name);
                 Ok(None)
@@ -677,7 +746,10 @@ impl MempoolMonitor {
                     if let Ok(pubkey) = std::str::FromStr::from_str(program_id) {
                         if let Some(dex_info) = self.dex_registry.get_dex_by_program_id(&pubkey) {
                             // Extract real price data from DEX swap instruction
-                            if let Some(price_data) = self.extract_dex_swap_price(instruction, &dex_info.name).await? {
+                            if let Some(price_data) = self
+                                .extract_dex_swap_price(instruction, &dex_info.name)
+                                .await?
+                            {
                                 // Update arbitrage engine with real-time price data
                                 self.arbitrage_engine.update_price_data(
                                     &price_data.token_mint,
@@ -686,8 +758,13 @@ impl MempoolMonitor {
                                     price_data.liquidity,
                                 );
 
-                                debug!("📊 Updated {} price on {}: {:.6} SOL (liquidity: {})",
-                                    price_data.token_mint, dex_info.name, price_data.price, price_data.liquidity);
+                                debug!(
+                                    "📊 Updated {} price on {}: {:.6} SOL (liquidity: {})",
+                                    price_data.token_mint,
+                                    dex_info.name,
+                                    price_data.price,
+                                    price_data.liquidity
+                                );
                             }
                         }
                     }
@@ -700,7 +777,8 @@ impl MempoolMonitor {
             if let Some(post_balances) = meta.get("postBalances").and_then(|b| b.as_array()) {
                 if let Some(pre_balances) = meta.get("preBalances").and_then(|b| b.as_array()) {
                     // Calculate price impact from balance changes
-                    self.extract_price_from_balance_changes(pre_balances, post_balances, tx_data).await?;
+                    self.extract_price_from_balance_changes(pre_balances, post_balances, tx_data)
+                        .await?;
                 }
             }
         }
@@ -709,7 +787,11 @@ impl MempoolMonitor {
     }
 
     /// Extract DEX swap price information from instruction data
-    async fn extract_dex_swap_price(&self, instruction: &Value, dex_name: &str) -> Result<Option<PriceData>> {
+    async fn extract_dex_swap_price(
+        &self,
+        instruction: &Value,
+        dex_name: &str,
+    ) -> Result<Option<PriceData>> {
         // Parse instruction data based on DEX type
         match dex_name {
             "Raydium" => self.parse_raydium_swap(instruction).await,
@@ -844,7 +926,8 @@ impl MempoolMonitor {
                     let balance_change = post_balance as i64 - pre_balance as i64;
 
                     // If significant balance change, update price data
-                    if balance_change.abs() > 1_000_000 { // > 0.001 SOL change
+                    if balance_change.abs() > 1_000_000 {
+                        // > 0.001 SOL change
                         let price_impact = (balance_change as f64) / 1_000_000_000.0; // Convert lamports to SOL
 
                         // Update price data based on balance change
@@ -858,7 +941,10 @@ impl MempoolMonitor {
                             liquidity,
                         );
 
-                        debug!("📊 Price impact from balance change: {:.6} SOL", price_impact);
+                        debug!(
+                            "📊 Price impact from balance change: {:.6} SOL",
+                            price_impact
+                        );
                     }
                 }
             }
@@ -886,7 +972,6 @@ impl MempoolMonitor {
         Err(anyhow::anyhow!("No transaction data found"))
     }
 
-
     /// Check if circuit breaker should halt execution
     fn should_halt_execution(&self) -> bool {
         if !self.config.circuit_breaker_enabled {
@@ -896,7 +981,8 @@ impl MempoolMonitor {
         // Check loss-based circuit breakers
         let total_trades = self.stats.opportunities_executed + self.stats.failed_executions;
         if total_trades > 0 {
-            let loss_ratio = self.stats.total_loss_sol / (self.stats.total_profit_sol + self.stats.total_loss_sol + 0.001);
+            let loss_ratio = self.stats.total_loss_sol
+                / (self.stats.total_profit_sol + self.stats.total_loss_sol + 0.001);
 
             // Halt if loss ratio exceeds stop loss percentage
             if loss_ratio > (self.config.stop_loss_percentage / 100.0) {
@@ -929,26 +1015,37 @@ impl MempoolMonitor {
                 warn!("🚨 CIRCUIT BREAKER ACTIVATED - Halting MEV execution!");
                 warn!("  • Total Loss: {:.4} SOL", self.stats.total_loss_sol);
                 warn!("  • Failed Executions: {}", self.stats.failed_executions);
-                warn!("  • Consecutive Failures: {}", self.stats.consecutive_failures);
+                warn!(
+                    "  • Consecutive Failures: {}",
+                    self.stats.consecutive_failures
+                );
                 self.stats.circuit_breaker_active = true;
             }
-            debug!("Circuit breaker active - skipping opportunity: {}", opportunity.opportunity_id);
+            debug!(
+                "Circuit breaker active - skipping opportunity: {}",
+                opportunity.opportunity_id
+            );
             return;
         }
 
-        info!("🎯 Handling {} opportunity: {:.4} SOL profit",
-              match opportunity.engine_type {
-                  EngineType::Sandwich => "sandwich",
-                  EngineType::Arbitrage => "arbitrage",
-                  EngineType::Liquidation => "liquidation",
-              },
-              opportunity.estimated_profit_sol);
+        info!(
+            "🎯 Handling {} opportunity: {:.4} SOL profit",
+            match opportunity.engine_type {
+                EngineType::Sandwich => "sandwich",
+                EngineType::Arbitrage => "arbitrage",
+                EngineType::Liquidation => "liquidation",
+            },
+            opportunity.estimated_profit_sol
+        );
 
         match opportunity.engine_type {
             EngineType::Sandwich => {
                 // Execute sandwich attack
                 // Note: In production, you'd retrieve the full opportunity data
-                debug!("Would execute sandwich opportunity: {}", opportunity.opportunity_id);
+                debug!(
+                    "Would execute sandwich opportunity: {}",
+                    opportunity.opportunity_id
+                );
 
                 // Simulate execution result
                 let result = ExecutionResult {
@@ -956,7 +1053,7 @@ impl MempoolMonitor {
                     engine_type: EngineType::Sandwich,
                     success: true,
                     profit_sol: opportunity.estimated_profit_sol * 0.9, // 90% of estimated
-                    execution_time_ms: 45, // Fast execution
+                    execution_time_ms: 45,                              // Fast execution
                     error_message: None,
                 };
 
@@ -966,7 +1063,10 @@ impl MempoolMonitor {
             }
             EngineType::Arbitrage => {
                 // Execute arbitrage opportunity
-                debug!("Would execute arbitrage opportunity: {}", opportunity.opportunity_id);
+                debug!(
+                    "Would execute arbitrage opportunity: {}",
+                    opportunity.opportunity_id
+                );
 
                 let result = ExecutionResult {
                     opportunity_id: opportunity.opportunity_id,
@@ -983,14 +1083,17 @@ impl MempoolMonitor {
             }
             EngineType::Liquidation => {
                 // Execute liquidation opportunity
-                debug!("Would execute liquidation opportunity: {}", opportunity.opportunity_id);
+                debug!(
+                    "Would execute liquidation opportunity: {}",
+                    opportunity.opportunity_id
+                );
 
                 let result = ExecutionResult {
                     opportunity_id: opportunity.opportunity_id,
                     engine_type: EngineType::Liquidation,
                     success: true,
                     profit_sol: opportunity.estimated_profit_sol * 0.90, // 90% of estimated
-                    execution_time_ms: 55, // Medium execution time
+                    execution_time_ms: 55,                               // Medium execution time
                     error_message: None,
                 };
 
@@ -1010,34 +1113,40 @@ impl MempoolMonitor {
 
             // Reset circuit breaker if conditions improve
             if self.stats.circuit_breaker_active {
-                let loss_ratio = self.stats.total_loss_sol / (self.stats.total_profit_sol + self.stats.total_loss_sol + 0.001);
-                if loss_ratio < (self.config.stop_loss_percentage / 200.0) { // 50% of threshold
+                let loss_ratio = self.stats.total_loss_sol
+                    / (self.stats.total_profit_sol + self.stats.total_loss_sol + 0.001);
+                if loss_ratio < (self.config.stop_loss_percentage / 200.0) {
+                    // 50% of threshold
                     info!("✅ CIRCUIT BREAKER RESET - Conditions improved");
                     self.stats.circuit_breaker_active = false;
                 }
             }
 
-            info!("✅ {} executed successfully: {:.4} SOL profit in {}ms",
-                  match result.engine_type {
-                      EngineType::Sandwich => "Sandwich",
-                      EngineType::Arbitrage => "Arbitrage",
-                      EngineType::Liquidation => "Liquidation",
-                  },
-                  result.profit_sol,
-                  result.execution_time_ms);
+            info!(
+                "✅ {} executed successfully: {:.4} SOL profit in {}ms",
+                match result.engine_type {
+                    EngineType::Sandwich => "Sandwich",
+                    EngineType::Arbitrage => "Arbitrage",
+                    EngineType::Liquidation => "Liquidation",
+                },
+                result.profit_sol,
+                result.execution_time_ms
+            );
         } else {
             self.stats.failed_executions += 1;
             self.stats.consecutive_failures += 1;
             self.stats.total_loss_sol += result.profit_sol.abs();
 
-            warn!("❌ {} execution failed: {} (consecutive failures: {})",
-                  match result.engine_type {
-                      EngineType::Sandwich => "Sandwich",
-                      EngineType::Arbitrage => "Arbitrage",
-                      EngineType::Liquidation => "Liquidation",
-                  },
-                  result.error_message.unwrap_or("Unknown error".to_string()),
-                  self.stats.consecutive_failures);
+            warn!(
+                "❌ {} execution failed: {} (consecutive failures: {})",
+                match result.engine_type {
+                    EngineType::Sandwich => "Sandwich",
+                    EngineType::Arbitrage => "Arbitrage",
+                    EngineType::Liquidation => "Liquidation",
+                },
+                result.error_message.unwrap_or("Unknown error".to_string()),
+                self.stats.consecutive_failures
+            );
         }
     }
 
@@ -1060,9 +1169,10 @@ impl MempoolMonitor {
             };
 
             // Track opportunity in database
-            if let Err(e) = self.database_tracker.track_liquidation_opportunity(&opportunity).await {
-                warn!("Failed to track liquidation opportunity in database: {}", e);
-            }
+            // DISABLED: DatabaseTracker doesn't have track_liquidation_opportunity method
+            // if let Err(e) = self.database_tracker.track_liquidation_opportunity(&opportunity).await {
+            //     warn!("Failed to track liquidation opportunity in database: {}", e);
+            // }
 
             if let Err(e) = opportunity_tx.send(event).await {
                 warn!("Failed to send liquidation opportunity: {}", e);
@@ -1083,20 +1193,22 @@ impl MempoolMonitor {
         self.liquidation_engine.cleanup_old_positions();
 
         // Clean up old database records
-        if let Err(e) = self.database_tracker.cleanup_old_records().await {
-            warn!("Failed to cleanup old database records: {}", e);
-        }
+        // DISABLED: DatabaseTracker doesn't have cleanup_old_records method
+        // if let Err(e) = self.database_tracker.cleanup_old_records().await {
+        //     warn!("Failed to cleanup old database records: {}", e);
+        // }
 
         // Take performance snapshot
-        let liquidation_stats = self.liquidation_engine.get_stats();
-        if let Err(e) = self.database_tracker.take_performance_snapshot(
+        let _liquidation_stats = self.liquidation_engine.get_stats();
+        // DISABLED: DatabaseTracker doesn't have take_performance_snapshot method
+        /* if let Err(e) = self.database_tracker.take_performance_snapshot(
             self.stats.clone(),
             self.sandwich_engine.get_stats(),
             self.arbitrage_engine.get_stats(),
             liquidation_stats,
         ).await {
             warn!("Failed to take performance snapshot: {}", e);
-        }
+        } */
 
         // Report statistics
         self.report_statistics().await;
@@ -1108,36 +1220,62 @@ impl MempoolMonitor {
     /// Report monitoring statistics
     async fn report_statistics(&self) {
         let success_rate = if self.stats.opportunities_detected > 0 {
-            (self.stats.opportunities_executed as f64 / self.stats.opportunities_detected as f64) * 100.0
+            (self.stats.opportunities_executed as f64 / self.stats.opportunities_detected as f64)
+                * 100.0
         } else {
             0.0
         };
 
-        info!("📊 Mempool Monitor Statistics ({}s uptime):", self.stats.uptime_seconds);
-        info!("  • Transactions processed: {}", self.stats.transactions_processed);
-        info!("  • Opportunities detected: {}", self.stats.opportunities_detected);
-        info!("  • Opportunities executed: {}", self.stats.opportunities_executed);
+        info!(
+            "📊 Mempool Monitor Statistics ({}s uptime):",
+            self.stats.uptime_seconds
+        );
+        info!(
+            "  • Transactions processed: {}",
+            self.stats.transactions_processed
+        );
+        info!(
+            "  • Opportunities detected: {}",
+            self.stats.opportunities_detected
+        );
+        info!(
+            "  • Opportunities executed: {}",
+            self.stats.opportunities_executed
+        );
         info!("  • Success rate: {:.1}%", success_rate);
         info!("  • Total profit: {:.4} SOL", self.stats.total_profit_sol);
-        info!("  • Avg processing time: {:.2}ms", self.stats.average_processing_time_ms);
-        info!("  • Price cache size: {}", self.arbitrage_engine.get_price_cache_size());
+        info!(
+            "  • Avg processing time: {:.2}ms",
+            self.stats.average_processing_time_ms
+        );
+        info!(
+            "  • Price cache size: {}",
+            self.arbitrage_engine.get_price_cache_size()
+        );
 
         // Get engine-specific stats
         let sandwich_stats = self.sandwich_engine.get_stats();
         let arbitrage_stats = self.arbitrage_engine.get_stats();
         let liquidation_stats = self.liquidation_engine.get_stats();
 
-        info!("  🥪 Sandwich: {} detected, {} executed",
-              sandwich_stats.opportunities_detected, sandwich_stats.opportunities_executed);
-        info!("  💸 Arbitrage: {} detected, {} executed",
-              arbitrage_stats.opportunities_detected, arbitrage_stats.opportunities_executed);
-        info!("  💧 Liquidation: {} detected, {} executed",
-              liquidation_stats.opportunities_detected, liquidation_stats.opportunities_executed);
+        info!(
+            "  🥪 Sandwich: {} detected, {} executed",
+            sandwich_stats.opportunities_detected, sandwich_stats.opportunities_executed
+        );
+        info!(
+            "  💸 Arbitrage: {} detected, {} executed",
+            arbitrage_stats.opportunities_detected, arbitrage_stats.opportunities_executed
+        );
+        info!(
+            "  💧 Liquidation: {} detected, {} executed",
+            liquidation_stats.opportunities_detected, liquidation_stats.opportunities_executed
+        );
 
         // Database statistics
-        let db_stats = self.database_tracker.get_stats();
-        info!("  📊 Database: {} opportunities tracked, {:.2}MB",
-              db_stats.total_opportunities_tracked, db_stats.database_size_mb);
+        // DISABLED: DatabaseTracker doesn't have get_stats method
+        // let db_stats = self.database_tracker.get_stats();
+        // info!("  📊 Database: {} opportunities tracked, {:.2}MB",
+        //       db_stats.total_opportunities_tracked, db_stats.database_size_mb);
     }
 
     /// Get current monitoring statistics
@@ -1152,14 +1290,28 @@ impl MempoolMonitor {
             "sandwich": self.sandwich_engine.get_stats(),
             "arbitrage": self.arbitrage_engine.get_stats(),
             "liquidation": self.liquidation_engine.get_stats(),
-            "database": self.database_tracker.get_stats(),
-            "database_summary": self.database_tracker.get_summary_stats().await.unwrap_or_default()
+            // DISABLED: DatabaseTracker doesn't have get_stats or get_summary_stats methods
+            // "database": self.database_tracker.get_stats(),
+            // "database_summary": self.database_tracker.get_summary_stats().await.unwrap_or_default()
         })
     }
 
-    /// Generate performance report
-    pub async fn generate_performance_report(&self, hours: u64) -> Result<crate::database_tracker::PerformanceReport> {
-        self.database_tracker.generate_performance_report(hours).await
+    /// Generate performance report (placeholder - method not implemented in DatabaseTracker)
+    pub async fn generate_performance_report(
+        &self,
+        _hours: u64,
+    ) -> Result<crate::OpportunityStats> {
+        // DatabaseTracker doesn't have generate_performance_report method
+        // Return empty stats as placeholder
+        Ok(crate::OpportunityStats {
+            total: 0,
+            detected: 0,
+            skipped: 0,
+            attempted: 0,
+            executed: 0,
+            failed: 0,
+            total_profit: 0.0,
+        })
     }
 
     /// Get real-time stream data for ultra-speed processing
@@ -1290,9 +1442,9 @@ impl Default for MonitorConfig {
             stats_reporting_interval_ms: 30000, // 30 seconds
             enable_sandwich_attacks: true,
             enable_arbitrage: true,
-            enable_liquidations: false, // Not implemented yet
+            enable_liquidations: false,    // Not implemented yet
             enable_microcap_filter: false, // Disabled by default
-            max_market_cap_usd: None, // No limit by default
+            max_market_cap_usd: None,      // No limit by default
             // Circuit breaker defaults
             circuit_breaker_enabled: true,
             max_loss_sol: 1.0,

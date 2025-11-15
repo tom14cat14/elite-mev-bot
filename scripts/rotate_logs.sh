@@ -1,54 +1,62 @@
 #!/bin/bash
-# Log Rotation Script for MEV Bot
-# Rotates logs when they exceed 100MB, keeps last 5 rotations
-# Also deletes rotations older than 1 minute (opportunities are gone)
+# MEV Bot Log Rotation Script
+# Rotates /tmp/mev_multidex.log when it gets large
+# Keeps last 5 rotated logs, compresses old ones
 
-LOG_DIR="/tmp"
-LOG_PREFIX="mev"
-MAX_SIZE_MB=100
-MAX_ROTATIONS=5
-MAX_AGE_MINUTES=1
+# Configuration
+LOG_FILE="/tmp/mev_multidex.log"
+MAX_SIZE_MB=100  # Rotate when log exceeds this size
+KEEP_ROTATIONS=5  # Keep this many old logs
+COMPRESS=true     # Compress old logs (saves 90%+ space)
 
-rotate_log() {
-    local log_file=$1
-    local base_name=$(basename "$log_file")
+# Get log file size in MB
+if [ ! -f "$LOG_FILE" ]; then
+    echo "Log file not found: $LOG_FILE"
+    exit 0
+fi
 
-    # Check if file exists and size
-    if [ ! -f "$log_file" ]; then
-        return
-    fi
+FILE_SIZE_MB=$(du -m "$LOG_FILE" | cut -f1)
+echo "Current log size: ${FILE_SIZE_MB}MB (max: ${MAX_SIZE_MB}MB)"
 
-    local size_mb=$(du -m "$log_file" | cut -f1)
+# Check if rotation needed
+if [ "$FILE_SIZE_MB" -lt "$MAX_SIZE_MB" ]; then
+    echo "No rotation needed."
+    exit 0
+fi
 
-    if [ "$size_mb" -gt "$MAX_SIZE_MB" ]; then
-        echo "Rotating $log_file (size: ${size_mb}MB)"
+echo "Log size exceeded ${MAX_SIZE_MB}MB - rotating..."
 
-        # Rotate existing backups
-        for i in $(seq $((MAX_ROTATIONS-1)) -1 1); do
-            if [ -f "${log_file}.${i}" ]; then
-                mv "${log_file}.${i}" "${log_file}.$((i+1))"
-            fi
-        done
+# Create timestamped backup
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+BACKUP_FILE="${LOG_FILE}.${TIMESTAMP}"
 
-        # Move current log to .1
-        mv "$log_file" "${log_file}.1"
-        touch "$log_file"
+# Copy current log to backup (don't move - bot is still writing)
+cp "$LOG_FILE" "$BACKUP_FILE"
+echo "Created backup: $BACKUP_FILE"
 
-        # Delete old rotations beyond max count
-        for i in $(seq $((MAX_ROTATIONS+1)) 10); do
-            rm -f "${log_file}.${i}"
-        done
+# Truncate original log (clears it while bot keeps file handle)
+> "$LOG_FILE"
+echo "Truncated original log file"
 
-        echo "Rotation complete. Kept last $MAX_ROTATIONS backups."
-    fi
+# Compress backup if enabled
+if [ "$COMPRESS" = true ]; then
+    gzip "$BACKUP_FILE"
+    echo "Compressed backup: ${BACKUP_FILE}.gz"
+    BACKUP_FILE="${BACKUP_FILE}.gz"
+fi
 
-    # Delete rotations older than MAX_AGE_MINUTES (opportunities expired)
-    find "${log_file}".* -type f -mmin +${MAX_AGE_MINUTES} -delete 2>/dev/null
-}
+# Delete old rotations (keep only KEEP_ROTATIONS most recent)
+OLD_LOGS=$(ls -t ${LOG_FILE}.* 2>/dev/null | tail -n +$((KEEP_ROTATIONS + 1)))
+if [ -n "$OLD_LOGS" ]; then
+    echo "Deleting old logs:"
+    echo "$OLD_LOGS"
+    echo "$OLD_LOGS" | xargs rm -f
+fi
 
-# Rotate all MEV bot logs
-for log in "${LOG_DIR}/${LOG_PREFIX}_"*.log; do
-    if [ -f "$log" ]; then
-        rotate_log "$log"
-    fi
-done
+# Show remaining logs
+echo ""
+echo "Rotated logs (keeping ${KEEP_ROTATIONS}):"
+ls -lh ${LOG_FILE}.* 2>/dev/null || echo "No rotated logs yet"
+
+echo ""
+echo "✅ Log rotation complete!"

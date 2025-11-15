@@ -1,16 +1,12 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use solana_sdk::{
-    instruction::CompiledInstruction,
-    pubkey::Pubkey,
-    transaction::Transaction,
-};
+use solana_sdk::{instruction::CompiledInstruction, pubkey::Pubkey, transaction::Transaction};
 use std::collections::HashMap;
 use std::str::FromStr;
 use tracing::{debug, info};
 
-use crate::dex_registry::{DexRegistry, DexInfo};
+use crate::dex_registry::{DexInfo, DexRegistry};
 use crate::dynamic_fee_model::DynamicFeeModel;
 
 /// Real-time transaction processor for MEV opportunities
@@ -126,17 +122,26 @@ impl TransactionProcessor {
         for transaction in transactions {
             if let Ok(tx_info) = self.extract_transaction_info(&transaction).await {
                 // Check for sandwich opportunities
-                if let Some(sandwich_op) = self.detect_sandwich_opportunity(&tx_info, block_timestamp).await? {
+                if let Some(sandwich_op) = self
+                    .detect_sandwich_opportunity(&tx_info, block_timestamp)
+                    .await?
+                {
                     opportunities.push(sandwich_op);
                 }
 
                 // Check for arbitrage opportunities
-                if let Some(arb_ops) = self.detect_arbitrage_opportunities(&tx_info, block_timestamp).await? {
+                if let Some(arb_ops) = self
+                    .detect_arbitrage_opportunities(&tx_info, block_timestamp)
+                    .await?
+                {
                     opportunities.extend(arb_ops);
                 }
 
                 // Check for liquidation opportunities
-                if let Some(liq_op) = self.detect_liquidation_opportunity(&tx_info, block_timestamp).await? {
+                if let Some(liq_op) = self
+                    .detect_liquidation_opportunity(&tx_info, block_timestamp)
+                    .await?
+                {
                     opportunities.push(liq_op);
                 }
             }
@@ -148,7 +153,10 @@ impl TransactionProcessor {
             .filter(|op| self.is_opportunity_profitable(op))
             .collect();
 
-        info!("Processed transaction batch, found {} profitable opportunities", filtered_opportunities.len());
+        info!(
+            "Processed transaction batch, found {} profitable opportunities",
+            filtered_opportunities.len()
+        );
 
         Ok(filtered_opportunities)
     }
@@ -161,7 +169,8 @@ impl TransactionProcessor {
         let mut contains_dex_interaction = false;
 
         for instruction in &message.instructions {
-            let program_id = message.account_keys[instruction.program_id_index as usize].to_string();
+            let program_id =
+                message.account_keys[instruction.program_id_index as usize].to_string();
 
             // Check if this is a DEX interaction
             if self.dex_registry.is_dex_program_str(&program_id) {
@@ -170,10 +179,15 @@ impl TransactionProcessor {
 
             let instruction_info = InstructionInfo {
                 program_id: program_id.clone(),
-                accounts: instruction.accounts.iter()
+                accounts: instruction
+                    .accounts
+                    .iter()
                     .map(|&i| message.account_keys[i as usize].to_string())
                     .collect(),
-                data_preview: format!("0x{}", hex::encode(&instruction.data[..std::cmp::min(16, instruction.data.len())])),
+                data_preview: format!(
+                    "0x{}",
+                    hex::encode(&instruction.data[..std::cmp::min(16, instruction.data.len())])
+                ),
                 instruction_type: self.classify_instruction(&program_id, &instruction.data),
             };
 
@@ -181,7 +195,12 @@ impl TransactionProcessor {
 
             // Extract token information (simplified)
             if contains_dex_interaction {
-                affected_tokens.extend(self.extract_tokens_from_compiled_instruction(instruction, &message.account_keys));
+                affected_tokens.extend(
+                    self.extract_tokens_from_compiled_instruction(
+                        instruction,
+                        &message.account_keys,
+                    ),
+                );
             }
         }
 
@@ -207,15 +226,20 @@ impl TransactionProcessor {
 
         // Look for large swaps that would cause significant slippage
         for instruction in &tx_info.instructions {
-            if let Some(dex_info) = self.dex_registry.get_dex_by_name(&self.classify_dex(&instruction.program_id)) {
+            if let Some(dex_info) = self
+                .dex_registry
+                .get_dex_by_name(&self.classify_dex(&instruction.program_id))
+            {
                 if dex_info.supports_sandwich {
                     // Simplified sandwich detection logic
                     let estimated_amount = self.estimate_swap_amount(&instruction.data_preview);
 
-                    if estimated_amount > 50_000_000 { // 50M lamports threshold
+                    if estimated_amount > 50_000_000 {
+                        // 50M lamports threshold
                         let estimated_slippage = self.estimate_slippage(estimated_amount, dex_info);
 
-                        if estimated_slippage > 0.01 { // 1% slippage threshold
+                        if estimated_slippage > 0.01 {
+                            // 1% slippage threshold
                             let estimated_profit = self.calculate_sandwich_profit(
                                 estimated_amount,
                                 estimated_slippage,
@@ -237,7 +261,8 @@ impl TransactionProcessor {
                                     confidence_score: 0.8, // Would be calculated based on various factors
                                     execution_priority: 9, // High priority for sandwich attacks
                                     expires_at: timestamp + chrono::Duration::seconds(30),
-                                    required_actions: self.build_sandwich_actions(estimated_amount, dex_info),
+                                    required_actions: self
+                                        .build_sandwich_actions(estimated_amount, dex_info),
                                 }));
                             }
                         }
@@ -264,9 +289,15 @@ impl TransactionProcessor {
             // Simplified arbitrage detection - would need real price feeds
             let price_diff = self.get_price_difference_estimate(dex1, dex2).await;
 
-            if price_diff > 0.02 { // 2% price difference threshold
-                let optimal_amount = self.calculate_optimal_arbitrage_amount(dex1, dex2, price_diff);
-                let estimated_profit = self.calculate_arbitrage_profit(optimal_amount, price_diff, dex1.fee_rate + dex2.fee_rate);
+            if price_diff > 0.02 {
+                // 2% price difference threshold
+                let optimal_amount =
+                    self.calculate_optimal_arbitrage_amount(dex1, dex2, price_diff);
+                let estimated_profit = self.calculate_arbitrage_profit(
+                    optimal_amount,
+                    price_diff,
+                    dex1.fee_rate + dex2.fee_rate,
+                );
 
                 if estimated_profit > self.min_profit_threshold {
                     opportunities.push(MevOpportunity {
@@ -320,7 +351,10 @@ impl TransactionProcessor {
 
     /// Check if an opportunity meets profitability requirements
     fn is_opportunity_profitable(&self, opportunity: &MevOpportunity) -> bool {
-        match self.fee_model.calculate_fees(opportunity.estimated_profit, 0.003) {
+        match self
+            .fee_model
+            .calculate_fees(opportunity.estimated_profit, 0.003)
+        {
             Ok(calculation) => calculation.should_execute,
             Err(_) => false,
         }
@@ -346,7 +380,11 @@ impl TransactionProcessor {
         "unknown".to_string()
     }
 
-    fn extract_tokens_from_compiled_instruction(&self, _instruction: &CompiledInstruction, _account_keys: &[Pubkey]) -> Vec<String> {
+    fn extract_tokens_from_compiled_instruction(
+        &self,
+        _instruction: &CompiledInstruction,
+        _account_keys: &[Pubkey],
+    ) -> Vec<String> {
         // Would parse instruction data to extract token mints
         vec![]
     }
@@ -375,7 +413,12 @@ impl TransactionProcessor {
         fastrand::f64() * 0.05 // Random for simulation
     }
 
-    fn calculate_optimal_arbitrage_amount(&self, _dex1: &DexInfo, _dex2: &DexInfo, _price_diff: f64) -> u64 {
+    fn calculate_optimal_arbitrage_amount(
+        &self,
+        _dex1: &DexInfo,
+        _dex2: &DexInfo,
+        _price_diff: f64,
+    ) -> u64 {
         // Would calculate optimal amount based on available liquidity and price impact
         1_000_000_000 // 1 SOL placeholder
     }
@@ -409,7 +452,12 @@ impl TransactionProcessor {
         ]
     }
 
-    fn build_arbitrage_actions(&self, amount: u64, dex1: &DexInfo, dex2: &DexInfo) -> Vec<RequiredAction> {
+    fn build_arbitrage_actions(
+        &self,
+        amount: u64,
+        dex1: &DexInfo,
+        dex2: &DexInfo,
+    ) -> Vec<RequiredAction> {
         vec![
             RequiredAction {
                 action_type: ActionType::Buy,
@@ -435,9 +483,9 @@ impl TransactionProcessor {
     fn is_lending_protocol(&self, program_id: &str) -> bool {
         // Check against known lending protocol program IDs
         let lending_protocols = [
-            "dRiftyHA39MWEi3m9aunc5MjRF1JYuBsbn6VPcn33UH", // Drift
+            "dRiftyHA39MWEi3m9aunc5MjRF1JYuBsbn6VPcn33UH",  // Drift
             "So1endDq2YkqhipRh3WViPaJ8LEs9MDCP2xuU4jBEAAg", // Solend
-            "KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD", // Kamino
+            "KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD",  // Kamino
             "HEvSKofvBgfaexv23kMabbYqxasxU3mQ4ibBMEmJWHny", // Hubble
         ];
 

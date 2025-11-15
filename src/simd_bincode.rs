@@ -89,27 +89,49 @@ impl SimdBincode {
 
     /// Check if current CPU supports required SIMD features
     pub fn is_simd_supported() -> bool {
-        cfg!(target_arch = "x86_64") &&
-        std::arch::is_x86_feature_detected!("avx2") &&
-        std::arch::is_x86_feature_detected!("fma") &&
-        std::arch::is_x86_feature_detected!("sse4.2")
+        cfg!(target_arch = "x86_64")
+            && std::arch::is_x86_feature_detected!("avx2")
+            && std::arch::is_x86_feature_detected!("fma")
+            && std::arch::is_x86_feature_detected!("sse4.2")
     }
 
     /// Get SIMD capability report
     pub fn get_simd_capabilities() -> String {
         let mut caps = Vec::new();
 
-        if std::arch::is_x86_feature_detected!("sse2") { caps.push("SSE2"); }
-        if std::arch::is_x86_feature_detected!("sse3") { caps.push("SSE3"); }
-        if std::arch::is_x86_feature_detected!("ssse3") { caps.push("SSSE3"); }
-        if std::arch::is_x86_feature_detected!("sse4.1") { caps.push("SSE4.1"); }
-        if std::arch::is_x86_feature_detected!("sse4.2") { caps.push("SSE4.2"); }
-        if std::arch::is_x86_feature_detected!("avx") { caps.push("AVX"); }
-        if std::arch::is_x86_feature_detected!("avx2") { caps.push("AVX2"); }
-        if std::arch::is_x86_feature_detected!("fma") { caps.push("FMA"); }
-        if std::arch::is_x86_feature_detected!("bmi1") { caps.push("BMI1"); }
-        if std::arch::is_x86_feature_detected!("bmi2") { caps.push("BMI2"); }
-        if std::arch::is_x86_feature_detected!("popcnt") { caps.push("POPCNT"); }
+        if std::arch::is_x86_feature_detected!("sse2") {
+            caps.push("SSE2");
+        }
+        if std::arch::is_x86_feature_detected!("sse3") {
+            caps.push("SSE3");
+        }
+        if std::arch::is_x86_feature_detected!("ssse3") {
+            caps.push("SSSE3");
+        }
+        if std::arch::is_x86_feature_detected!("sse4.1") {
+            caps.push("SSE4.1");
+        }
+        if std::arch::is_x86_feature_detected!("sse4.2") {
+            caps.push("SSE4.2");
+        }
+        if std::arch::is_x86_feature_detected!("avx") {
+            caps.push("AVX");
+        }
+        if std::arch::is_x86_feature_detected!("avx2") {
+            caps.push("AVX2");
+        }
+        if std::arch::is_x86_feature_detected!("fma") {
+            caps.push("FMA");
+        }
+        if std::arch::is_x86_feature_detected!("bmi1") {
+            caps.push("BMI1");
+        }
+        if std::arch::is_x86_feature_detected!("bmi2") {
+            caps.push("BMI2");
+        }
+        if std::arch::is_x86_feature_detected!("popcnt") {
+            caps.push("POPCNT");
+        }
 
         if caps.is_empty() {
             "No SIMD features detected".to_string()

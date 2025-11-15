@@ -2,7 +2,12 @@
 // These are minimal implementations to allow compilation and safe paper trading
 
 use anyhow::Result;
-use solana_sdk::{pubkey::Pubkey, signature::{Keypair, Signer}, instruction::Instruction, transaction::Transaction};
+use solana_sdk::{
+    instruction::Instruction,
+    pubkey::Pubkey,
+    signature::{Keypair, Signer},
+    transaction::Transaction,
+};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -76,7 +81,10 @@ pub mod websocket_dashboard {
 
     impl WebSocketDashboard {
         pub fn new(port: u16) -> Result<Self> {
-            println!("[INFO] 🌐 Starting WebSocket dashboard server on port {}", port);
+            println!(
+                "[INFO] 🌐 Starting WebSocket dashboard server on port {}",
+                port
+            );
             Ok(Self { port })
         }
 
@@ -85,27 +93,41 @@ pub mod websocket_dashboard {
 
             // Start the HTTP server in the background with better error handling
             tokio::spawn(async move {
-                println!("[INFO] 🔧 Attempting to start dashboard HTTP server on port {}", port);
+                println!(
+                    "[INFO] 🔧 Attempting to start dashboard HTTP server on port {}",
+                    port
+                );
                 match Self::run_server(port).await {
                     Ok(_) => {
-                        println!("[INFO] ✅ Dashboard HTTP server started successfully on port {}", port);
+                        println!(
+                            "[INFO] ✅ Dashboard HTTP server started successfully on port {}",
+                            port
+                        );
                     }
                     Err(e) => {
-                        println!("[ERROR] ❌ Dashboard HTTP server failed to start on port {}: {}", port, e);
-                        println!("[ERROR] This might be due to port already in use or permission issues");
+                        println!(
+                            "[ERROR] ❌ Dashboard HTTP server failed to start on port {}: {}",
+                            port, e
+                        );
+                        println!(
+                            "[ERROR] This might be due to port already in use or permission issues"
+                        );
                     }
                 }
             });
 
             // Give the server a moment to start
             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-            println!("[INFO] ✅ WebSocket dashboard startup initiated on port {}", self.port);
+            println!(
+                "[INFO] ✅ WebSocket dashboard startup initiated on port {}",
+                self.port
+            );
             Ok(())
         }
 
         async fn run_server(port: u16) -> Result<()> {
-            use tokio::net::TcpListener;
             use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            use tokio::net::TcpListener;
 
             let listener = TcpListener::bind(format!("0.0.0.0:{}", port)).await?;
             println!("[INFO] 📊 Dashboard HTTP server listening on port {}", port);
@@ -124,7 +146,8 @@ pub mod websocket_dashboard {
                             Self::serve_dashboard_html(&mut stream).await.ok();
                         } else {
                             // Return 404 for other requests
-                            let response = "HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nNot Found";
+                            let response =
+                                "HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nNot Found";
                             stream.write_all(response.as_bytes()).await.ok();
                         }
                     }
@@ -287,7 +310,10 @@ pub mod metrics_dashboard {
 
     impl MetricsDashboard {
         pub fn new(config: DashboardConfig) -> Result<Self> {
-            println!("[INFO] 📊 Starting Prometheus metrics dashboard on port {}", config.port);
+            println!(
+                "[INFO] 📊 Starting Prometheus metrics dashboard on port {}",
+                config.port
+            );
             Ok(Self { port: config.port })
         }
 
@@ -409,7 +435,11 @@ pub mod jito_bundle_client {
             })
         }
 
-        pub async fn submit_bundle(&self, transactions: Vec<Transaction>, tip_lamports: u64) -> Result<String> {
+        pub async fn submit_bundle(
+            &self,
+            transactions: Vec<Transaction>,
+            tip_lamports: u64,
+        ) -> Result<String> {
             // Check if paper trading is enabled
             let paper_trading = std::env::var("PAPER_TRADING")
                 .unwrap_or_else(|_| "false".to_string())
@@ -427,15 +457,19 @@ pub mod jito_bundle_client {
                     let mut metrics = self.metrics.write().await;
                     metrics.bundles_sent += 1;
                     metrics.bundles_landed += 1; // Assume paper trading always "lands"
-                    metrics.average_tip_lamports = (metrics.average_tip_lamports + tip_lamports) / 2;
+                    metrics.average_tip_lamports =
+                        (metrics.average_tip_lamports + tip_lamports) / 2;
                 }
 
                 return Ok(mock_bundle_id);
             }
 
             // REAL JITO BUNDLE SUBMISSION
-            println!("[INFO] 📦 REAL TRADING: Submitting bundle with {} transactions, tip: {} lamports",
-                transactions.len(), tip_lamports);
+            println!(
+                "[INFO] 📦 REAL TRADING: Submitting bundle with {} transactions, tip: {} lamports",
+                transactions.len(),
+                tip_lamports
+            );
 
             // Serialize transactions to base58
             let mut serialized_txs = Vec::new();
@@ -455,7 +489,8 @@ pub mod jito_bundle_client {
             });
 
             // Submit to JITO block engine
-            let response = self.client
+            let response = self
+                .client
                 .post(&format!("{}/api/v1/bundles", self.block_engine_url))
                 .header("Content-Type", "application/json")
                 .json(&bundle_request)
@@ -465,11 +500,20 @@ pub mod jito_bundle_client {
 
             if !response.status().is_success() {
                 let status_code = response.status();
-                let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-                return Err(anyhow::anyhow!("Bundle submission failed: HTTP {}, {}", status_code, error_text));
+                let error_text = response
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "Unknown error".to_string());
+                return Err(anyhow::anyhow!(
+                    "Bundle submission failed: HTTP {}, {}",
+                    status_code,
+                    error_text
+                ));
             }
 
-            let response_json: Value = response.json().await
+            let response_json: Value = response
+                .json()
+                .await
                 .map_err(|e| anyhow::anyhow!("Failed to parse bundle response: {}", e))?;
 
             // Extract bundle ID from response
@@ -524,11 +568,17 @@ pub mod jito_bundle_client {
                             "pending" | "processing" => {
                                 // Continue monitoring
                                 if attempts % 5 == 0 {
-                                    println!("[INFO] ⏳ Bundle still pending: {} ({}s)", bundle_id, attempts);
+                                    println!(
+                                        "[INFO] ⏳ Bundle still pending: {} ({}s)",
+                                        bundle_id, attempts
+                                    );
                                 }
                             }
                             _ => {
-                                println!("[WARN] ❓ Unknown bundle status: {} ({})", bundle_id, status);
+                                println!(
+                                    "[WARN] ❓ Unknown bundle status: {} ({})",
+                                    bundle_id, status
+                                );
                             }
                         }
                     }
@@ -550,7 +600,8 @@ pub mod jito_bundle_client {
                 "params": [[bundle_id]]
             });
 
-            let response = self.client
+            let response = self
+                .client
                 .post(&format!("{}/api/v1/bundles", self.block_engine_url))
                 .header("Content-Type", "application/json")
                 .json(&status_request)
@@ -558,7 +609,9 @@ pub mod jito_bundle_client {
                 .await
                 .map_err(|e| anyhow::anyhow!("Failed to check bundle status: {}", e))?;
 
-            let response_json: Value = response.json().await
+            let response_json: Value = response
+                .json()
+                .await
                 .map_err(|e| anyhow::anyhow!("Failed to parse status response: {}", e))?;
 
             // Extract status from response
@@ -576,7 +629,8 @@ pub mod jito_bundle_client {
 
         pub fn get_metrics(&self) -> JitoMetrics {
             // Return a snapshot of current metrics
-            self.metrics.try_read()
+            self.metrics
+                .try_read()
                 .map(|m| m.clone())
                 .unwrap_or_default()
         }
@@ -696,16 +750,22 @@ pub mod pumpfun_integration {
 
         if paper_trading {
             // Paper trading mode - return a harmless no-op instruction
-            println!("[INFO] 📦 PAPER TRADING: Creating buy instruction for {} SOL", lamports as f64 / 1_000_000_000.0);
+            println!(
+                "[INFO] 📦 PAPER TRADING: Creating buy instruction for {} SOL",
+                lamports as f64 / 1_000_000_000.0
+            );
             return Ok(Instruction::new_with_bytes(
                 solana_sdk::system_program::id(), // Use system program for safety
                 &[],
-                vec![]
+                vec![],
             ));
         }
 
         // REAL PUMPFUN BUY INSTRUCTION
-        println!("[INFO] 💰 REAL TRADING: Creating PumpFun buy instruction for {} SOL", lamports as f64 / 1_000_000_000.0);
+        println!(
+            "[INFO] 💰 REAL TRADING: Creating PumpFun buy instruction for {} SOL",
+            lamports as f64 / 1_000_000_000.0
+        );
 
         // PumpFun program ID
         let pumpfun_program_id = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
@@ -716,19 +776,14 @@ pub mod pumpfun_integration {
         let associated_token_account = derive_associated_token_address(owner, mint)?;
 
         // Derive bonding curve address using PDA
-        let (bonding_curve, _bump) = Pubkey::find_program_address(
-            &[b"bonding-curve", mint.as_ref()],
-            &pumpfun_program_id,
-        );
+        let (bonding_curve, _bump) =
+            Pubkey::find_program_address(&[b"bonding-curve", mint.as_ref()], &pumpfun_program_id);
 
         // Associated bonding curve account (manual calculation)
         let associated_bonding_curve = derive_associated_token_address(&bonding_curve, mint)?;
 
         // Global account (common across all PumpFun tokens)
-        let (global, _) = Pubkey::find_program_address(
-            &[b"global"],
-            &pumpfun_program_id,
-        );
+        let (global, _) = Pubkey::find_program_address(&[b"global"], &pumpfun_program_id);
 
         // Fee recipient (PumpFun fee collection account)
         let fee_recipient = "CebN5WGQ4jvEPvsVU4EoHEpgzq1VV2vVojYF77bYFSW"
@@ -752,16 +807,22 @@ pub mod pumpfun_integration {
 
         // Account metas for PumpFun buy instruction
         let account_metas = vec![
-            solana_sdk::instruction::AccountMeta::new(*mint, false),                    // Token mint
-            solana_sdk::instruction::AccountMeta::new(bonding_curve, false),           // Bonding curve
+            solana_sdk::instruction::AccountMeta::new(*mint, false), // Token mint
+            solana_sdk::instruction::AccountMeta::new(bonding_curve, false), // Bonding curve
             solana_sdk::instruction::AccountMeta::new(associated_bonding_curve, false), // Bonding curve token account
             solana_sdk::instruction::AccountMeta::new(associated_token_account, false), // User token account
-            solana_sdk::instruction::AccountMeta::new(*owner, true),                   // User wallet (signer)
-            solana_sdk::instruction::AccountMeta::new_readonly(solana_sdk::system_program::id(), false), // System program
+            solana_sdk::instruction::AccountMeta::new(*owner, true), // User wallet (signer)
+            solana_sdk::instruction::AccountMeta::new_readonly(
+                solana_sdk::system_program::id(),
+                false,
+            ), // System program
             solana_sdk::instruction::AccountMeta::new_readonly(spl_token::id(), false), // Token program
-            solana_sdk::instruction::AccountMeta::new_readonly(solana_sdk::sysvar::rent::id(), false), // Rent sysvar
-            solana_sdk::instruction::AccountMeta::new(global, false),                  // Global account
-            solana_sdk::instruction::AccountMeta::new(fee_recipient, false),           // Fee recipient
+            solana_sdk::instruction::AccountMeta::new_readonly(
+                solana_sdk::sysvar::rent::id(),
+                false,
+            ), // Rent sysvar
+            solana_sdk::instruction::AccountMeta::new(global, false), // Global account
+            solana_sdk::instruction::AccountMeta::new(fee_recipient, false), // Fee recipient
         ];
 
         Ok(Instruction {
@@ -786,16 +847,22 @@ pub mod pumpfun_integration {
 
         if paper_trading {
             // Paper trading mode - return a harmless no-op instruction
-            println!("[INFO] 📦 PAPER TRADING: Creating sell instruction for {} tokens", token_amount);
+            println!(
+                "[INFO] 📦 PAPER TRADING: Creating sell instruction for {} tokens",
+                token_amount
+            );
             return Ok(Instruction::new_with_bytes(
                 solana_sdk::system_program::id(), // Use system program for safety
                 &[],
-                vec![]
+                vec![],
             ));
         }
 
         // REAL PUMPFUN SELL INSTRUCTION
-        println!("[INFO] 💰 REAL TRADING: Creating PumpFun sell instruction for {} tokens", token_amount);
+        println!(
+            "[INFO] 💰 REAL TRADING: Creating PumpFun sell instruction for {} tokens",
+            token_amount
+        );
 
         // PumpFun program ID
         let pumpfun_program_id = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
@@ -806,19 +873,14 @@ pub mod pumpfun_integration {
         let associated_token_account = derive_associated_token_address(owner, mint)?;
 
         // Derive bonding curve address using PDA
-        let (bonding_curve, _bump) = Pubkey::find_program_address(
-            &[b"bonding-curve", mint.as_ref()],
-            &pumpfun_program_id,
-        );
+        let (bonding_curve, _bump) =
+            Pubkey::find_program_address(&[b"bonding-curve", mint.as_ref()], &pumpfun_program_id);
 
         // Associated bonding curve account (manual calculation)
         let associated_bonding_curve = derive_associated_token_address(&bonding_curve, mint)?;
 
         // Global account (common across all PumpFun tokens)
-        let (global, _) = Pubkey::find_program_address(
-            &[b"global"],
-            &pumpfun_program_id,
-        );
+        let (global, _) = Pubkey::find_program_address(&[b"global"], &pumpfun_program_id);
 
         // Fee recipient (PumpFun fee collection account)
         let fee_recipient = "CebN5WGQ4jvEPvsVU4EoHEpgzq1VV2vVojYF77bYFSW"
@@ -841,16 +903,22 @@ pub mod pumpfun_integration {
 
         // Account metas for PumpFun sell instruction
         let account_metas = vec![
-            solana_sdk::instruction::AccountMeta::new(*mint, false),                    // Token mint
-            solana_sdk::instruction::AccountMeta::new(bonding_curve, false),           // Bonding curve
+            solana_sdk::instruction::AccountMeta::new(*mint, false), // Token mint
+            solana_sdk::instruction::AccountMeta::new(bonding_curve, false), // Bonding curve
             solana_sdk::instruction::AccountMeta::new(associated_bonding_curve, false), // Bonding curve token account
             solana_sdk::instruction::AccountMeta::new(associated_token_account, false), // User token account
-            solana_sdk::instruction::AccountMeta::new(*owner, true),                   // User wallet (signer)
-            solana_sdk::instruction::AccountMeta::new_readonly(solana_sdk::system_program::id(), false), // System program
+            solana_sdk::instruction::AccountMeta::new(*owner, true), // User wallet (signer)
+            solana_sdk::instruction::AccountMeta::new_readonly(
+                solana_sdk::system_program::id(),
+                false,
+            ), // System program
             solana_sdk::instruction::AccountMeta::new_readonly(spl_token::id(), false), // Token program
-            solana_sdk::instruction::AccountMeta::new_readonly(solana_sdk::sysvar::rent::id(), false), // Rent sysvar
-            solana_sdk::instruction::AccountMeta::new(global, false),                  // Global account
-            solana_sdk::instruction::AccountMeta::new(fee_recipient, false),           // Fee recipient
+            solana_sdk::instruction::AccountMeta::new_readonly(
+                solana_sdk::sysvar::rent::id(),
+                false,
+            ), // Rent sysvar
+            solana_sdk::instruction::AccountMeta::new(global, false), // Global account
+            solana_sdk::instruction::AccountMeta::new(fee_recipient, false), // Fee recipient
         ];
 
         Ok(Instruction {
@@ -881,11 +949,7 @@ pub mod pumpfun_integration {
 
         // Find PDA for associated token account
         let (associated_token_address, _bump) = Pubkey::find_program_address(
-            &[
-                owner.as_ref(),
-                spl_token_program_id.as_ref(),
-                mint.as_ref(),
-            ],
+            &[owner.as_ref(), spl_token_program_id.as_ref(), mint.as_ref()],
             &associated_token_program_id,
         );
 

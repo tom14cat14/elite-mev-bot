@@ -1,6 +1,6 @@
+use crate::mev_database_tracker::MevDatabaseTracker;
 use anyhow::Result;
 use shared_bot_infrastructure::*;
-use crate::mev_database_tracker::MevDatabaseTracker;
 use solana_sdk::signature::Signer;
 use solana_transaction_status::{UiTransactionEncoding, UiTransactionStatusMeta};
 use std::sync::RwLock;
@@ -31,19 +31,19 @@ macro_rules! debug {
         println!("[DEBUG] {}", format!($($arg)*));
     };
 }
-use tokio::signal;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use tokio::signal;
 use tokio::time::interval;
 
 // Import WebSocket dashboard
 use crate::websocket_dashboard::{
-    WebSocketDashboard, DashboardMetrics, LatencyMetrics, TradingMetrics, HealthMetrics, SystemMetrics, LatencyPercentiles,
-    LivePerformanceMonitor
+    DashboardMetrics, HealthMetrics, LatencyMetrics, LatencyPercentiles, LivePerformanceMonitor,
+    SystemMetrics, TradingMetrics, WebSocketDashboard,
 };
 
 // Import Prometheus metrics dashboard
-use crate::metrics_dashboard::{MetricsDashboard, DashboardConfig, AlertThresholds};
+use crate::metrics_dashboard::{AlertThresholds, DashboardConfig, MetricsDashboard};
 
 // Import dynamic configuration
 use crate::dynamic_config_manager::DynamicConfigManager;
@@ -54,22 +54,22 @@ use crate::jito_bundle_client::JitoBundleClient;
 
 // Import secure wallet management
 use crate::secure_wallet_manager::SecureWalletManager;
+use solana_rpc_client::rpc_client::RpcClient;
+use solana_rpc_client_api::config::RpcSimulateTransactionConfig;
 use solana_sdk::{
-    transaction::Transaction,
-    instruction::{Instruction, AccountMeta},
+    compute_budget::ComputeBudgetInstruction,
+    instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
     signature::{Keypair, Signature},
     system_instruction,
-    compute_budget::ComputeBudgetInstruction,
+    transaction::Transaction,
 };
-use solana_rpc_client::rpc_client::RpcClient;
-use solana_rpc_client_api::config::RpcSimulateTransactionConfig;
 use std::str::FromStr;
 // Note: Using simplified simulation approach due to crate version constraints
 
 // Import our new ultra-speed optimizations
 use crate::market_cap_filter::ShredStreamTokenFilter;
-use shared_bot_infrastructure::{RealtimePriceMonitor, TokenPrice, realtime_price_monitor};
+use shared_bot_infrastructure::{realtime_price_monitor, RealtimePriceMonitor, TokenPrice};
 use std::collections::VecDeque;
 
 #[derive(Clone)]
@@ -126,22 +126,22 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 pub struct SafetyLimits {
     pub max_daily_loss_sol: f64,
     pub max_position_size_sol: f64,
-    pub min_wallet_reserve_sol: f64,  // Reserve for fees
-    pub daily_loss_counter: Arc<AtomicU64>,  // Atomic for thread safety (lamports)
-    pub volatility_buffer: f64,  // GROK ITERATION 7: Buffer for SOL price volatility (0.8 = 20% buffer)
+    pub min_wallet_reserve_sol: f64,        // Reserve for fees
+    pub daily_loss_counter: Arc<AtomicU64>, // Atomic for thread safety (lamports)
+    pub volatility_buffer: f64, // GROK ITERATION 7: Buffer for SOL price volatility (0.8 = 20% buffer)
 }
 
 /// GROK CYCLE 2 FIX #5: Explicit failure type classification for circuit breaker
 /// GROK CYCLE 3: Added InsufficientMargin for profit threshold tracking
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FailureType {
-    BundleRejection,      // JITO bundle rejected by validator
-    NetworkError,         // RPC timeout, connection failure
-    InsufficientBalance,  // Wallet balance too low
-    TransactionFailed,    // Transaction executed but failed on-chain
-    SlippageExceeded,     // Trade executed with excessive slippage
-    InsufficientMargin,   // GROK CYCLE 3: Net profit below required margin
-    Other,                // Unclassified failures
+    BundleRejection,     // JITO bundle rejected by validator
+    NetworkError,        // RPC timeout, connection failure
+    InsufficientBalance, // Wallet balance too low
+    TransactionFailed,   // Transaction executed but failed on-chain
+    SlippageExceeded,    // Trade executed with excessive slippage
+    InsufficientMargin,  // GROK CYCLE 3: Net profit below required margin
+    Other,               // Unclassified failures
 }
 
 /// GROK CYCLE 2 FIX #3: RAII guard for balance reservation
@@ -232,12 +232,16 @@ impl CircuitBreaker {
             failures.remove(0);
         }
 
-        warn!("⚠️ Circuit breaker: Failure {} of {} | Type: {:?}",
-              count, self.consecutive_failures_threshold, failure_type);
+        warn!(
+            "⚠️ Circuit breaker: Failure {} of {} | Type: {:?}",
+            count, self.consecutive_failures_threshold, failure_type
+        );
 
         if count >= self.consecutive_failures_threshold {
-            error!("🔒 Circuit breaker OPENED - halting trades | Recent failures: {:?}",
-                   failures.iter().map(|(_, t)| t).collect::<Vec<_>>());
+            error!(
+                "🔒 Circuit breaker OPENED - halting trades | Recent failures: {:?}",
+                failures.iter().map(|(_, t)| t).collect::<Vec<_>>()
+            );
             self.is_open.store(true, Ordering::Relaxed);
             *self.last_failure_time.lock().unwrap() = Some(now);
         }
@@ -302,7 +306,7 @@ impl Default for EnhancedUltraSpeedConfig {
             enable_ultra_simd: true,
             enable_predictive_detection: true,
             enable_multi_stream: false,
-            new_coin_quality_threshold: 8.5,  // Lowered to 8.5 to see more opportunities
+            new_coin_quality_threshold: 8.5, // Lowered to 8.5 to see more opportunities
             bonding_curve_completion_threshold: 0.75,
             max_detection_age_seconds: 60,
             enable_cpu_optimizations: true,
@@ -316,7 +320,10 @@ impl Default for EnhancedUltraSpeedConfig {
                 Ok(v) => match v.parse::<f64>() {
                     Ok(val) => {
                         if val <= 0.0 || val > 10.0 {
-                            warn!("MAX_POSITION_SIZE_SOL out of range ({}), using default 0.5", val);
+                            warn!(
+                                "MAX_POSITION_SIZE_SOL out of range ({}), using default 0.5",
+                                val
+                            );
                             0.5
                         } else {
                             val
@@ -347,7 +354,7 @@ impl Default for EnhancedUltraSpeedConfig {
             jito_endpoint: "https://jito-api.mainnet-beta.solana.com".to_string(),
 
             // Trading infrastructure
-            min_token_quality_score: 8.5,  // Matched to new_coin_quality_threshold for consistency
+            min_token_quality_score: 8.5, // Matched to new_coin_quality_threshold for consistency
 
             // Market filtering
             max_market_cap_usd: 90_000.0,
@@ -458,23 +465,30 @@ impl ProductionTradeExecutor {
                 estimated_profit_sol: trade_params.estimated_profit,
                 actual_profit_sol: None,
                 gas_used_lamports: simulation_result.gas_used,
-                error_message: Some(simulation_result.error.unwrap_or("Simulation failed".to_string())),
+                error_message: Some(
+                    simulation_result
+                        .error
+                        .unwrap_or("Simulation failed".to_string()),
+                ),
             });
         }
 
         // Step 4: Execute via Jito bundle or regular transaction
         let execution_result = if config.enable_jito_bundles {
-            self.execute_via_jito_bundle(transaction, &trade_params).await?
+            self.execute_via_jito_bundle(transaction, &trade_params)
+                .await?
         } else {
             self.execute_regular_transaction(transaction).await?
         };
 
         let execution_time = execution_start.elapsed().as_millis() as f64;
 
-        info!("🎯 PumpFun trade executed: {} | Time: {:.2}ms | Success: {}",
-              token.symbol.as_deref().unwrap_or("UNKNOWN"),
-              execution_time,
-              execution_result.success);
+        info!(
+            "🎯 PumpFun trade executed: {} | Time: {:.2}ms | Success: {}",
+            token.symbol.as_deref().unwrap_or("UNKNOWN"),
+            execution_time,
+            execution_result.success
+        );
 
         Ok(TradeExecutionResult {
             success: execution_result.success,
@@ -499,13 +513,12 @@ impl ProductionTradeExecutor {
         // Calculate position size based on quality score and available liquidity
         let base_position = config.max_position_size_sol * 0.5; // Start with 50% of max
         let quality_multiplier = (token.quality_score / 10.0).min(1.5);
-        let position_size_sol = (base_position * quality_multiplier).min(config.max_position_size_sol);
+        let position_size_sol =
+            (base_position * quality_multiplier).min(config.max_position_size_sol);
 
         // Calculate expected tokens received
-        let tokens_received = self.calculate_bonding_curve_output(
-            &bonding_curve_state,
-            position_size_sol,
-        )?;
+        let tokens_received =
+            self.calculate_bonding_curve_output(&bonding_curve_state, position_size_sol)?;
 
         // Estimate profit based on bonding curve progression
         let estimated_profit = self.estimate_profit_potential(
@@ -525,10 +538,7 @@ impl ProductionTradeExecutor {
     }
 
     /// Build PumpFun bonding curve transaction
-    async fn build_pumpfun_transaction(
-        &self,
-        params: &TradeParameters,
-    ) -> Result<Transaction> {
+    async fn build_pumpfun_transaction(&self, params: &TradeParameters) -> Result<Transaction> {
         // REAL IMPLEMENTATION: Fetch latest blockhash from RPC
         debug!("🔗 Fetching latest blockhash for transaction...");
         let recent_blockhash = self.rpc_client.get_latest_blockhash()?;
@@ -536,15 +546,15 @@ impl ProductionTradeExecutor {
         let mut instructions = Vec::new();
 
         // Add compute budget instruction for priority
+        instructions.push(ComputeBudgetInstruction::set_compute_unit_limit(400_000));
         instructions.push(
-            ComputeBudgetInstruction::set_compute_unit_limit(400_000)
-        );
-        instructions.push(
-            ComputeBudgetInstruction::set_compute_unit_price(10_000) // Micro-lamports
+            ComputeBudgetInstruction::set_compute_unit_price(10_000), // Micro-lamports
         );
 
         // Create associated token account address manually (SPL standard)
-        let associated_token_program_id = solana_sdk::pubkey::Pubkey::from_str("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL").unwrap();
+        let associated_token_program_id =
+            solana_sdk::pubkey::Pubkey::from_str("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL")
+                .unwrap();
         let token_account = solana_sdk::pubkey::Pubkey::find_program_address(
             &[
                 &self.wallet_keypair.pubkey().to_bytes(),
@@ -552,23 +562,27 @@ impl ProductionTradeExecutor {
                 &params.token_mint.to_bytes(),
             ],
             &associated_token_program_id,
-        ).0;
+        )
+        .0;
 
         // Check if associated token account exists, create if needed
         debug!("🔍 Checking if token account exists: {}", token_account);
         match self.rpc_client.get_account(&token_account) {
             Err(_) => {
-                debug!("➕ Creating associated token account for {}", params.token_mint);
+                debug!(
+                    "➕ Creating associated token account for {}",
+                    params.token_mint
+                );
                 // Create associated token account instruction manually
                 let create_ata_instruction = Instruction {
                     program_id: associated_token_program_id,
                     accounts: vec![
-                        AccountMeta::new(self.wallet_keypair.pubkey(), true),  // payer
-                        AccountMeta::new(token_account, false),                // associated token account
+                        AccountMeta::new(self.wallet_keypair.pubkey(), true), // payer
+                        AccountMeta::new(token_account, false), // associated token account
                         AccountMeta::new_readonly(self.wallet_keypair.pubkey(), false), // owner
-                        AccountMeta::new_readonly(params.token_mint, false),   // mint
+                        AccountMeta::new_readonly(params.token_mint, false), // mint
                         AccountMeta::new_readonly(solana_sdk::system_program::id(), false), // system program
-                        AccountMeta::new_readonly(spl_token::id(), false),     // token program
+                        AccountMeta::new_readonly(spl_token::id(), false), // token program
                     ],
                     data: vec![], // No instruction data needed for create
                 };
@@ -583,10 +597,8 @@ impl ProductionTradeExecutor {
         let pumpfun_instruction = self.build_pumpfun_buy_instruction(params)?;
         instructions.push(pumpfun_instruction);
 
-        let transaction = Transaction::new_with_payer(
-            &instructions,
-            Some(&self.wallet_keypair.pubkey()),
-        );
+        let transaction =
+            Transaction::new_with_payer(&instructions, Some(&self.wallet_keypair.pubkey()));
 
         let mut signed_transaction = transaction;
         signed_transaction.sign(&[&*self.wallet_keypair], recent_blockhash);
@@ -595,16 +607,14 @@ impl ProductionTradeExecutor {
     }
 
     /// Build PumpFun bonding curve buy instruction
-    fn build_pumpfun_buy_instruction(
-        &self,
-        params: &TradeParameters,
-    ) -> Result<Instruction> {
+    fn build_pumpfun_buy_instruction(&self, params: &TradeParameters) -> Result<Instruction> {
         // REAL IMPLEMENTATION: Use actual PumpFun integration
         use crate::pumpfun_integration::PumpFunIntegration;
 
         let pumpfun = PumpFunIntegration::new();
         let (bonding_curve, _) = pumpfun.derive_bonding_curve_address(&params.token_mint)?;
-        let (associated_bonding_curve, _) = pumpfun.derive_associated_bonding_curve_address(&params.token_mint)?;
+        let (associated_bonding_curve, _) =
+            pumpfun.derive_associated_bonding_curve_address(&params.token_mint)?;
 
         let user_token_account = solana_sdk::pubkey::Pubkey::find_program_address(
             &[
@@ -613,10 +623,12 @@ impl ProductionTradeExecutor {
                 &params.token_mint.to_bytes(),
             ],
             &spl_token::ID,
-        ).0;
+        )
+        .0;
 
         let sol_amount_lamports = (params.sol_amount * 1_000_000_000.0) as u64;
-        let max_sol_cost = (sol_amount_lamports as f64 * (1.0 + params.max_slippage / 100.0)) as u64;
+        let max_sol_cost =
+            (sol_amount_lamports as f64 * (1.0 + params.max_slippage / 100.0)) as u64;
 
         pumpfun.create_buy_instruction(
             &params.token_mint,
@@ -637,7 +649,9 @@ impl ProductionTradeExecutor {
     ) -> Result<ExecutionResult> {
         // Create Jito tip transaction
         // Use a hardcoded tip account (first Jito tip account)
-        let tip_account = "96gYZGLnJYVFmbjzopPSU6QiEV5fGqZNyN9nmNhvrZU5".parse().unwrap();
+        let tip_account = "96gYZGLnJYVFmbjzopPSU6QiEV5fGqZNyN9nmNhvrZU5"
+            .parse()
+            .unwrap();
         let tip_instruction = system_instruction::transfer(
             &self.wallet_keypair.pubkey(),
             &tip_account,
@@ -662,11 +676,11 @@ impl ProductionTradeExecutor {
     }
 
     /// Submit bundle to Jito block engine
-    async fn submit_jito_bundle(
-        &self,
-        bundle: Vec<Transaction>,
-    ) -> Result<ExecutionResult> {
-        info!("📦 Submitting Jito bundle with {} transactions to real Jito block engine", bundle.len());
+    async fn submit_jito_bundle(&self, bundle: Vec<Transaction>) -> Result<ExecutionResult> {
+        info!(
+            "📦 Submitting Jito bundle with {} transactions to real Jito block engine",
+            bundle.len()
+        );
 
         // REAL IMPLEMENTATION: Use actual JitoBundleClient
         let tip_lamports = Some(10_000); // 0.00001 SOL tip
@@ -706,10 +720,7 @@ impl ProductionTradeExecutor {
     }
 
     /// Monitor JITO bundle for confirmation and calculate real profit
-    async fn monitor_bundle_profit(
-        &self,
-        bundle_id: &str,
-    ) -> BundleMonitoringResult {
+    async fn monitor_bundle_profit(&self, bundle_id: &str) -> BundleMonitoringResult {
         info!("👁️ Monitoring bundle {} for confirmation...", bundle_id);
 
         let initial_balance = match self.get_sol_balance().await {
@@ -743,7 +754,10 @@ impl ProductionTradeExecutor {
                             Some(balance_change) // Negative profit (loss)
                         };
 
-                        info!("✅ Bundle {} confirmed | Balance change: {:.6} SOL", bundle_id, balance_change);
+                        info!(
+                            "✅ Bundle {} confirmed | Balance change: {:.6} SOL",
+                            bundle_id, balance_change
+                        );
 
                         return BundleMonitoringResult {
                             profit_sol,
@@ -759,7 +773,10 @@ impl ProductionTradeExecutor {
         }
 
         // Timeout reached - bundle may have failed
-        warn!("⏰ Bundle {} monitoring timeout - no confirmation detected", bundle_id);
+        warn!(
+            "⏰ Bundle {} monitoring timeout - no confirmation detected",
+            bundle_id
+        );
 
         BundleMonitoringResult {
             profit_sol: None,
@@ -782,7 +799,10 @@ impl ProductionTradeExecutor {
 
                 // Calculate actual profit from transaction result
                 // In a real implementation, you would parse the transaction logs
-                let estimated_profit = self.calculate_transaction_profit(&signature).await.unwrap_or(0.08);
+                let estimated_profit = self
+                    .calculate_transaction_profit(&signature)
+                    .await
+                    .unwrap_or(0.08);
 
                 Ok(ExecutionResult {
                     success: true,
@@ -809,7 +829,10 @@ impl ProductionTradeExecutor {
     async fn calculate_transaction_profit(&self, signature: &Signature) -> Result<f64> {
         debug!("🔍 Analyzing transaction logs for real profit calculation...");
 
-        match self.rpc_client.get_transaction(signature, UiTransactionEncoding::JsonParsed) {
+        match self
+            .rpc_client
+            .get_transaction(signature, UiTransactionEncoding::JsonParsed)
+        {
             Ok(transaction_response) => {
                 if let Some(meta) = transaction_response.transaction.meta {
                     // Parse actual profit from transaction logs
@@ -822,14 +845,20 @@ impl ProductionTradeExecutor {
                 }
             }
             Err(e) => {
-                warn!("❌ Failed to fetch transaction for profit calculation: {}", e);
+                warn!(
+                    "❌ Failed to fetch transaction for profit calculation: {}",
+                    e
+                );
                 Ok(0.02) // Very conservative estimate for failed fetches
             }
         }
     }
 
     /// Parse actual profit from transaction metadata and logs
-    async fn parse_profit_from_transaction_meta(&self, meta: &UiTransactionStatusMeta) -> Result<f64> {
+    async fn parse_profit_from_transaction_meta(
+        &self,
+        meta: &UiTransactionStatusMeta,
+    ) -> Result<f64> {
         let mut total_profit = 0.0;
 
         // Parse pre and post balances to calculate SOL changes
@@ -841,8 +870,8 @@ impl ProductionTradeExecutor {
         if pre_balances.len() > 0 && post_balances.len() > 0 {
             // Assume first account is the wallet for now (simplified)
             if let (Some(&pre_balance), Some(&post_balance)) =
-                (pre_balances.get(0), post_balances.get(0)) {
-
+                (pre_balances.get(0), post_balances.get(0))
+            {
                 let balance_change = post_balance as i64 - pre_balance as i64;
                 let sol_change = balance_change as f64 / 1_000_000_000.0;
 
@@ -858,7 +887,9 @@ impl ProductionTradeExecutor {
             solana_transaction_status::option_serializer::OptionSerializer::Some(logs) => {
                 for log in logs {
                     // Look for PumpFun-specific log patterns
-                    if log.contains("Program log: Instruction: Buy") || log.contains("Program log: Instruction: Sell") {
+                    if log.contains("Program log: Instruction: Buy")
+                        || log.contains("Program log: Instruction: Sell")
+                    {
                         debug!("🔍 Found PumpFun trade log: {}", log);
 
                         // Extract token amounts from logs if available
@@ -869,7 +900,7 @@ impl ProductionTradeExecutor {
                         }
                     }
                 }
-            },
+            }
             _ => {} // Handle None case
         }
 
@@ -881,7 +912,10 @@ impl ProductionTradeExecutor {
 
         // Validate profit calculation
         if total_profit.abs() > 10.0 {
-            warn!("⚠️  Suspicious profit calculation: {:.6} SOL, using conservative estimate", total_profit);
+            warn!(
+                "⚠️  Suspicious profit calculation: {:.6} SOL, using conservative estimate",
+                total_profit
+            );
             return Ok(0.05);
         }
 
@@ -916,10 +950,7 @@ impl ProductionTradeExecutor {
     }
 
     /// Get current bonding curve state
-    async fn get_bonding_curve_state(
-        &self,
-        token_mint: &Pubkey,
-    ) -> Result<BondingCurveState> {
+    async fn get_bonding_curve_state(&self, token_mint: &Pubkey) -> Result<BondingCurveState> {
         // REAL IMPLEMENTATION: Fetch actual bonding curve account data
         use crate::pumpfun_integration::PumpFunIntegration;
 
@@ -933,28 +964,37 @@ impl ProductionTradeExecutor {
                 if account.data.len() >= 64 {
                     // Extract bonding curve state from account data
                     // This is simplified - real implementation would parse the exact PumpFun layout
-                    let virtual_token_reserves = u64::from_le_bytes(
-                        account.data[8..16].try_into().unwrap_or([0; 8])
-                    ) as u64;
-                    let virtual_sol_reserves = u64::from_le_bytes(
-                        account.data[16..24].try_into().unwrap_or([0; 8])
-                    ) as u64;
-                    let real_token_reserves = u64::from_le_bytes(
-                        account.data[24..32].try_into().unwrap_or([0; 8])
-                    ) as u64;
-                    let real_sol_reserves = u64::from_le_bytes(
-                        account.data[32..40].try_into().unwrap_or([0; 8])
-                    ) as u64;
+                    let virtual_token_reserves =
+                        u64::from_le_bytes(account.data[8..16].try_into().unwrap_or([0; 8])) as u64;
+                    let virtual_sol_reserves =
+                        u64::from_le_bytes(account.data[16..24].try_into().unwrap_or([0; 8]))
+                            as u64;
+                    let real_token_reserves =
+                        u64::from_le_bytes(account.data[24..32].try_into().unwrap_or([0; 8]))
+                            as u64;
+                    let real_sol_reserves =
+                        u64::from_le_bytes(account.data[32..40].try_into().unwrap_or([0; 8]))
+                            as u64;
 
-                    info!("📊 Real bonding curve data | SOL: {} | Tokens: {} | Complete: {}",
-                          real_sol_reserves as f64 / 1_000_000_000.0,
-                          real_token_reserves,
-                          real_sol_reserves >= 85_000_000_000); // ~85 SOL completion
+                    info!(
+                        "📊 Real bonding curve data | SOL: {} | Tokens: {} | Complete: {}",
+                        real_sol_reserves as f64 / 1_000_000_000.0,
+                        real_token_reserves,
+                        real_sol_reserves >= 85_000_000_000
+                    ); // ~85 SOL completion
 
                     Ok(BondingCurveState {
                         account: bonding_curve_pubkey,
-                        virtual_token_reserves: if virtual_token_reserves > 0 { virtual_token_reserves } else { 1_073_000_000 },
-                        virtual_sol_reserves: if virtual_sol_reserves > 0 { virtual_sol_reserves } else { 30_000_000_000 },
+                        virtual_token_reserves: if virtual_token_reserves > 0 {
+                            virtual_token_reserves
+                        } else {
+                            1_073_000_000
+                        },
+                        virtual_sol_reserves: if virtual_sol_reserves > 0 {
+                            virtual_sol_reserves
+                        } else {
+                            30_000_000_000
+                        },
                         real_token_reserves,
                         real_sol_reserves,
                         token_total_supply: 1_000_000_000,
@@ -974,7 +1014,10 @@ impl ProductionTradeExecutor {
                 }
             }
             Err(e) => {
-                warn!("⚠️  Failed to fetch bonding curve account, using defaults: {}", e);
+                warn!(
+                    "⚠️  Failed to fetch bonding curve account, using defaults: {}",
+                    e
+                );
                 // Fallback to default state
                 Ok(BondingCurveState {
                     account: bonding_curve_pubkey,
@@ -1026,10 +1069,7 @@ impl ProductionTradeExecutor {
     }
 
     /// Simulate transaction before execution
-    async fn simulate_transaction(
-        &self,
-        transaction: &Transaction,
-    ) -> Result<SimulationResult> {
+    async fn simulate_transaction(&self, transaction: &Transaction) -> Result<SimulationResult> {
         debug!("🔍 Simulating transaction before execution");
 
         // REAL IMPLEMENTATION: Use actual RPC simulate_transaction
@@ -1043,7 +1083,10 @@ impl ProductionTradeExecutor {
             inner_instructions: false,
         };
 
-        match self.rpc_client.simulate_transaction_with_config(transaction, simulate_config) {
+        match self
+            .rpc_client
+            .simulate_transaction_with_config(transaction, simulate_config)
+        {
             Ok(simulation_response) => {
                 let success = simulation_response.value.err.is_none();
                 let gas_used = simulation_response.value.units_consumed.unwrap_or(400_000);
@@ -1166,7 +1209,10 @@ impl Default for UltraSpeedMetrics {
 }
 
 /// Comprehensive safety verification before enabling live trading
-async fn perform_safety_verification(config: &EnhancedUltraSpeedConfig, trading_keypair: &Arc<Keypair>) -> Result<()> {
+async fn perform_safety_verification(
+    config: &EnhancedUltraSpeedConfig,
+    trading_keypair: &Arc<Keypair>,
+) -> Result<()> {
     info!("🛡️ PERFORMING COMPREHENSIVE SAFETY VERIFICATION...");
 
     // VERIFICATION 1: Trading mode detection (both modes are safe to continue)
@@ -1181,24 +1227,34 @@ async fn perform_safety_verification(config: &EnhancedUltraSpeedConfig, trading_
     // VERIFICATION 2: Check wallet balance
     let rpc_url = std::env::var("SOLANA_RPC_ENDPOINT")
         .unwrap_or_else(|_| "https://api.mainnet-beta.solana.com".to_string());
-    let using_erpc = rpc_url.contains("erpc");  // Check BEFORE moving rpc_url
+    let using_erpc = rpc_url.contains("erpc"); // Check BEFORE moving rpc_url
     let rpc_client = solana_rpc_client::rpc_client::RpcClient::new(rpc_url);
-    let balance_lamports = rpc_client.get_balance(&trading_keypair.pubkey())
+    let balance_lamports = rpc_client
+        .get_balance(&trading_keypair.pubkey())
         .map_err(|e| anyhow::anyhow!("Failed to check wallet balance: {}", e))?;
     let balance_sol = balance_lamports as f64 / 1_000_000_000.0;
 
     if balance_sol < 0.5 {
-        return Err(anyhow::anyhow!("❌ INSUFFICIENT BALANCE: {:.3} SOL < 0.5 SOL minimum required", balance_sol));
+        return Err(anyhow::anyhow!(
+            "❌ INSUFFICIENT BALANCE: {:.3} SOL < 0.5 SOL minimum required",
+            balance_sol
+        ));
     }
 
     // VERIFICATION 3: Check configuration limits (allow up to 2.0 SOL for testing/benchmarking)
     if config.max_position_size_sol > 2.0 {
-        return Err(anyhow::anyhow!("❌ UNSAFE POSITION SIZE: {} SOL > 2.0 SOL maximum allowed", config.max_position_size_sol));
+        return Err(anyhow::anyhow!(
+            "❌ UNSAFE POSITION SIZE: {} SOL > 2.0 SOL maximum allowed",
+            config.max_position_size_sol
+        ));
     }
 
     // Warn if position size is high
     if config.max_position_size_sol > 1.0 {
-        warn!("⚠️ HIGH POSITION SIZE: {} SOL (recommended: ≤1.0 SOL)", config.max_position_size_sol);
+        warn!(
+            "⚠️ HIGH POSITION SIZE: {} SOL (recommended: ≤1.0 SOL)",
+            config.max_position_size_sol
+        );
     }
 
     // VERIFICATION 4: Verify JITO configuration
@@ -1219,10 +1275,20 @@ async fn perform_safety_verification(config: &EnhancedUltraSpeedConfig, trading_
     // FINAL VERIFICATION: User confirmation required for live trading
     warn!("🚨 LIVE TRADING MODE ENABLED");
     warn!("   Wallet: {}", trading_keypair.pubkey());
-    warn!("   💰 Balance: {:.6} SOL ({} lamports) [via eRPC]", balance_sol, balance_lamports);
+    warn!(
+        "   💰 Balance: {:.6} SOL ({} lamports) [via eRPC]",
+        balance_sol, balance_lamports
+    );
     warn!("   Max Position: {:.3} SOL", config.max_position_size_sol);
     warn!("   JITO Enabled: {}", config.enable_jito_bundles);
-    info!("🔗 Using eRPC endpoint for balance checks: {}", if using_erpc { "✅ Authenticated" } else { "⚠️  Public RPC" });
+    info!(
+        "🔗 Using eRPC endpoint for balance checks: {}",
+        if using_erpc {
+            "✅ Authenticated"
+        } else {
+            "⚠️  Public RPC"
+        }
+    );
 
     info!("✅ SAFETY VERIFICATION COMPLETE - READY FOR LIVE TRADING");
     Ok(())
@@ -1301,7 +1367,10 @@ impl EnhancedFailoverSystem {
         if let Some(endpoint) = self.endpoints.get_mut(failed_endpoint_index) {
             endpoint.last_failure = Some(Instant::now());
             endpoint.failure_count += 1;
-            warn!("📡 Endpoint failed: {} (failures: {})", endpoint.url, endpoint.failure_count);
+            warn!(
+                "📡 Endpoint failed: {} (failures: {})",
+                endpoint.url, endpoint.failure_count
+            );
         }
 
         // Find next available endpoint
@@ -1414,7 +1483,9 @@ async fn main() -> Result<()> {
         error!("   export PAPER_TRADING=false");
         error!("");
         error!("   Bot refusing to start with misconfiguration.");
-        return Err(anyhow::anyhow!("Configuration validation failed: Not configured for live trading"));
+        return Err(anyhow::anyhow!(
+            "Configuration validation failed: Not configured for live trading"
+        ));
     }
 
     info!("✅ Configuration validated: Live trading enabled");
@@ -1440,9 +1511,16 @@ async fn main() -> Result<()> {
     match jito_health_check {
         Ok(response) => {
             if response.status().is_success() {
-                info!("✅ JITO endpoint healthy: {} (status: {})", jito_endpoint, response.status());
+                info!(
+                    "✅ JITO endpoint healthy: {} (status: {})",
+                    jito_endpoint,
+                    response.status()
+                );
             } else {
-                warn!("⚠️  JITO health check returned non-200: {} (continuing anyway)", response.status());
+                warn!(
+                    "⚠️  JITO health check returned non-200: {} (continuing anyway)",
+                    response.status()
+                );
             }
         }
         Err(e) => {
@@ -1477,9 +1555,18 @@ async fn main() -> Result<()> {
     // Add configuration update callback for runtime parameter changes
     dynamic_config.add_update_callback(|config| {
         info!("⚙️ Configuration updated - Version: {}", config.version);
-        info!("💰 Max position size: {} SOL", config.risk_management.max_position_size_sol);
-        info!("⚡ Target latency: {} ms", config.performance_tuning.target_latency_ms);
-        info!("🛡️ Emergency stop: {}", config.risk_management.emergency_stop);
+        info!(
+            "💰 Max position size: {} SOL",
+            config.risk_management.max_position_size_sol
+        );
+        info!(
+            "⚡ Target latency: {} ms",
+            config.performance_tuning.target_latency_ms
+        );
+        info!(
+            "🛡️ Emergency stop: {}",
+            config.risk_management.emergency_stop
+        );
     });
 
     // Initialize WebSocket dashboard
@@ -1495,15 +1582,15 @@ async fn main() -> Result<()> {
 
     // Initialize Prometheus metrics dashboard
     let prometheus_config = DashboardConfig {
-        update_interval_ms: 1000, // 1 second updates
+        update_interval_ms: 1000,    // 1 second updates
         history_retention_hours: 24, // 24 hours of history
         enable_prometheus_export: true,
         prometheus_port: 9090,
         enable_grafana_integration: true,
         alert_thresholds: AlertThresholds {
-            max_latency_ms: 50.0, // 50ms max latency
+            max_latency_ms: 50.0,  // 50ms max latency
             min_success_rate: 0.8, // 80% minimum success rate
-            max_loss_sol: 0.1, // Max 0.1 SOL loss
+            max_loss_sol: 0.1,     // Max 0.1 SOL loss
             max_consecutive_failures: 5,
             min_profit_rate_sol_per_hour: 0.01, // Minimum 0.01 SOL/hour
         },
@@ -1586,8 +1673,14 @@ async fn main() -> Result<()> {
     let _failover_system = EnhancedFailoverSystem::new();
 
     info!("🎯 PRODUCTION MEV Bot v2.1 initialized and ready for real trading");
-    info!("⚠️  SAFETY: Real trading is {} by default",
-          if ultra_config.enable_real_trading { "ENABLED" } else { "DISABLED" });
+    info!(
+        "⚠️  SAFETY: Real trading is {} by default",
+        if ultra_config.enable_real_trading {
+            "ENABLED"
+        } else {
+            "DISABLED"
+        }
+    );
     info!("🌐 WebSocket Dashboard: http://151.243.244.130:8081/dashboard.html");
     info!("📊 Prometheus Metrics: http://151.243.244.130:9090");
 
@@ -1612,7 +1705,7 @@ async fn main() -> Result<()> {
 
             // Calculate latency percentiles
             let latency_percentiles = LatencyPercentiles {
-                p50: 8.5,   // Simulated for now
+                p50: 8.5, // Simulated for now
                 p95: 14.2,
                 p99: 18.7,
                 p999: 24.1,
@@ -1640,10 +1733,14 @@ async fn main() -> Result<()> {
                     total_volume_sol: total_profit_sol * 12.5, // Estimate
                     win_rate: if total_trades > 0 {
                         (successful_trades as f64 / total_trades as f64) * 100.0
-                    } else { 0.0 },
+                    } else {
+                        0.0
+                    },
                     average_profit_per_trade: if total_trades > 0 {
                         total_profit_sol / total_trades as f64
-                    } else { 0.0 },
+                    } else {
+                        0.0
+                    },
                     trades_per_minute: 0.0, // Calculate based on time window
                     quality_scores: vec![7.2, 8.1, 6.9, 9.2], // Recent quality scores
                 },
@@ -1708,7 +1805,7 @@ async fn main() -> Result<()> {
     };
 
     let new_coin_detector = Arc::new(RwLock::new(
-        crate::pumpfun_new_coin_detector::PumpFunNewCoinDetector::new(detector_config)?
+        crate::pumpfun_new_coin_detector::PumpFunNewCoinDetector::new(detector_config)?,
     ));
 
     info!("✅ NEW COIN DETECTOR INITIALIZED");
@@ -1722,9 +1819,9 @@ async fn main() -> Result<()> {
             minimum_market_cap_usd: 0.0, // No minimum for PumpFun
             minimum_volume_24h_usd: ultra_config.min_volume_usd_per_minute * 24.0 * 60.0, // Convert per-minute to 24h
             minimum_liquidity_usd: 1000.0, // $1K liquidity minimum
-            minimum_holder_count: 10, // Lower threshold for new tokens
-            maximum_age_minutes: 60, // 1 hour max age
-        }
+            minimum_holder_count: 10,      // Lower threshold for new tokens
+            maximum_age_minutes: 60,       // 1 hour max age
+        },
     ));
 
     // Initialize ultra-speed metrics
@@ -1736,21 +1833,32 @@ async fn main() -> Result<()> {
 
     let safety_limits = Arc::new(SafetyLimits {
         max_daily_loss_sol: std::env::var("MAX_DAILY_LOSS_SOL")
-            .ok().and_then(|v| v.parse().ok()).unwrap_or(0.2),
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0.2),
         max_position_size_sol: std::env::var("MAX_POSITION_SIZE_SOL")
-            .ok().and_then(|v| v.parse().ok()).unwrap_or(0.1),
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0.1),
         min_wallet_reserve_sol: std::env::var("MIN_WALLET_RESERVE_SOL")
-            .ok().and_then(|v| v.parse().ok()).unwrap_or(0.05),
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0.05),
         daily_loss_counter: Arc::new(AtomicU64::new(0)),
         // GROK ITERATION 7 FIX #2: Volatility buffer to account for SOL price swings
         // GROK ITERATION 8 FIX: Add bounds checking (clamp to 0.1-1.0)
         // 1.0 = NO BUFFER (100% position sizing - MAXIMUM AGGRESSION)
         volatility_buffer: {
             let raw_buffer: f64 = std::env::var("SOL_VOLATILITY_BUFFER")
-                .ok().and_then(|v| v.parse().ok()).unwrap_or(1.0);
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(1.0);
             let clamped = raw_buffer.clamp(0.1, 1.0);
             if (raw_buffer - clamped).abs() > 0.001 {
-                warn!("⚠️ SOL_VOLATILITY_BUFFER out of bounds ({}) - clamped to {}", raw_buffer, clamped);
+                warn!(
+                    "⚠️ SOL_VOLATILITY_BUFFER out of bounds ({}) - clamped to {}",
+                    raw_buffer, clamped
+                );
             }
             clamped
         },
@@ -1760,41 +1868,57 @@ async fn main() -> Result<()> {
     // GROK ITERATION 9 FIX: Use tokio::fs for non-blocking async I/O
     let loss_state_file = std::path::PathBuf::from(".mev_daily_loss.state");
     match tokio::fs::try_exists(&loss_state_file).await {
-        Ok(true) => {
-            match tokio::fs::read_to_string(&loss_state_file).await {
-                Ok(content) => {
-                    if let Ok(saved_lamports) = content.trim().parse::<u64>() {
-                        safety_limits.daily_loss_counter.store(saved_lamports, Ordering::Relaxed);
-                        let saved_sol = saved_lamports as f64 / 1_000_000_000.0;
-                        info!("📂 Loaded persisted daily loss: {:.6} SOL from {}", saved_sol, loss_state_file.display());
-                    } else {
-                        warn!("⚠️ Failed to parse daily loss state file - starting fresh");
-                    }
-                }
-                Err(e) => {
-                    warn!("⚠️ Failed to read daily loss state file: {} - starting fresh", e);
+        Ok(true) => match tokio::fs::read_to_string(&loss_state_file).await {
+            Ok(content) => {
+                if let Ok(saved_lamports) = content.trim().parse::<u64>() {
+                    safety_limits
+                        .daily_loss_counter
+                        .store(saved_lamports, Ordering::Relaxed);
+                    let saved_sol = saved_lamports as f64 / 1_000_000_000.0;
+                    info!(
+                        "📂 Loaded persisted daily loss: {:.6} SOL from {}",
+                        saved_sol,
+                        loss_state_file.display()
+                    );
+                } else {
+                    warn!("⚠️ Failed to parse daily loss state file - starting fresh");
                 }
             }
-        }
+            Err(e) => {
+                warn!(
+                    "⚠️ Failed to read daily loss state file: {} - starting fresh",
+                    e
+                );
+            }
+        },
         Ok(false) => {
             info!("📂 No persisted daily loss found - starting fresh");
         }
         Err(e) => {
-            warn!("⚠️ Failed to check daily loss state file: {} - starting fresh", e);
+            warn!(
+                "⚠️ Failed to check daily loss state file: {} - starting fresh",
+                e
+            );
         }
     }
 
     let circuit_breaker = Arc::new(CircuitBreaker::new(
         std::env::var("CIRCUIT_BREAKER_THRESHOLD")
-            .ok().and_then(|v| v.parse().ok()).unwrap_or(5u64),  // 5 failures
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(5u64), // 5 failures
         std::env::var("CIRCUIT_BREAKER_RESET_SECS")
-            .ok().and_then(|v| v.parse().ok()).unwrap_or(60u64), // 60 seconds timeout
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(60u64), // 60 seconds timeout
     ));
 
     info!("✅ Safety limits configured: Max Loss={:.2} SOL, Max Position={:.2} SOL, Reserve={:.2} SOL, Volatility Buffer={:.2}",
           safety_limits.max_daily_loss_sol, safety_limits.max_position_size_sol, safety_limits.min_wallet_reserve_sol, safety_limits.volatility_buffer);
-    info!("✅ Circuit breaker configured: {} failures threshold, {} second reset",
-          5, 60);
+    info!(
+        "✅ Circuit breaker configured: {} failures threshold, {} second reset",
+        5, 60
+    );
 
     // GROK ITERATION 7 FIX #1: Daily loss counter reset at midnight UTC
     // GROK ITERATION 8 FIX #1: Delete persisted state file on reset
@@ -1810,10 +1934,15 @@ async fn main() -> Result<()> {
 
             // Reset at midnight UTC (00:00)
             if now.hour() == 0 && now.minute() == 0 {
-                let old_value = safety_limits_reset.daily_loss_counter.swap(0, Ordering::Relaxed);
+                let old_value = safety_limits_reset
+                    .daily_loss_counter
+                    .swap(0, Ordering::Relaxed);
                 if old_value > 0 {
                     let old_sol = old_value as f64 / 1_000_000_000.0;
-                    info!("🔄 DAILY RESET: Loss counter reset at midnight UTC | Previous: {:.6} SOL", old_sol);
+                    info!(
+                        "🔄 DAILY RESET: Loss counter reset at midnight UTC | Previous: {:.6} SOL",
+                        old_sol
+                    );
                 } else {
                     info!("🔄 DAILY RESET: Loss counter reset at midnight UTC | Previous: 0.0 SOL");
                 }
@@ -1848,7 +1977,9 @@ async fn main() -> Result<()> {
 
         loop {
             interval.tick().await;
-            let current_lamports = safety_limits_persist.daily_loss_counter.load(Ordering::Relaxed);
+            let current_lamports = safety_limits_persist
+                .daily_loss_counter
+                .load(Ordering::Relaxed);
 
             // Only save if there's an actual loss to persist
             // GROK ITERATION 9 FIX: Use tokio::fs for non-blocking async I/O
@@ -1873,14 +2004,43 @@ async fn main() -> Result<()> {
     info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     info!("✅ Configuration loaded:");
     info!("  • Wallet: {}", trading_keypair_arc.pubkey());
-    info!("  • RPC Endpoint: {}", std::env::var("SOLANA_RPC_ENDPOINT").unwrap_or_else(|_| "default".to_string()));
-    info!("  • ShredStream: {}", std::env::var("SHREDS_ENDPOINT").unwrap_or_else(|_| "https://shreds-ny6-1.erpc.global".to_string()));
-    info!("  • Max Position: {:.2} SOL", safety_limits.max_position_size_sol);
-    info!("  • Max Daily Loss: {:.2} SOL", safety_limits.max_daily_loss_sol);
-    info!("  • Min Wallet Reserve: {:.2} SOL", safety_limits.min_wallet_reserve_sol);
-    info!("  • Volatility Buffer: {:.0}%", safety_limits.volatility_buffer * 100.0);
-    info!("  • Min Quality Score: {:.1}", ultra_config.min_token_quality_score);
-    info!("  • Trading mode: {}", if ultra_config.enable_real_trading { "LIVE 🔴" } else { "PAPER 📝" });
+    info!(
+        "  • RPC Endpoint: {}",
+        std::env::var("SOLANA_RPC_ENDPOINT").unwrap_or_else(|_| "default".to_string())
+    );
+    info!(
+        "  • ShredStream: {}",
+        std::env::var("SHREDS_ENDPOINT")
+            .unwrap_or_else(|_| "https://shreds-ny6-1.erpc.global".to_string())
+    );
+    info!(
+        "  • Max Position: {:.2} SOL",
+        safety_limits.max_position_size_sol
+    );
+    info!(
+        "  • Max Daily Loss: {:.2} SOL",
+        safety_limits.max_daily_loss_sol
+    );
+    info!(
+        "  • Min Wallet Reserve: {:.2} SOL",
+        safety_limits.min_wallet_reserve_sol
+    );
+    info!(
+        "  • Volatility Buffer: {:.0}%",
+        safety_limits.volatility_buffer * 100.0
+    );
+    info!(
+        "  • Min Quality Score: {:.1}",
+        ultra_config.min_token_quality_score
+    );
+    info!(
+        "  • Trading mode: {}",
+        if ultra_config.enable_real_trading {
+            "LIVE 🔴"
+        } else {
+            "PAPER 📝"
+        }
+    );
     info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
     // Main production trading loop with REAL continuous ShredStream processing
@@ -1904,7 +2064,10 @@ async fn main() -> Result<()> {
     let rpc_url = std::env::var("SOLANA_RPC_ENDPOINT")
         .unwrap_or_else(|_| "https://api.mainnet-beta.solana.com".to_string());
 
-    info!("🌊 Connecting to ShredStream for LIVE swap detection: {}", endpoint);
+    info!(
+        "🌊 Connecting to ShredStream for LIVE swap detection: {}",
+        endpoint
+    );
     info!("🔗 RPC endpoint: {}", rpc_url);
     let mut processor = ShredStreamProcessor::new(endpoint.clone());
 
@@ -1922,8 +2085,8 @@ async fn main() -> Result<()> {
             let _ = tracker.log_config(
                 "multi-dex",
                 paper_trading,
-                0.01,  // min_swap_size_sol (from config)
-                100.0, // max_swap_size_sol (from config)
+                0.01,   // min_swap_size_sol (from config)
+                100.0,  // max_swap_size_sol (from config)
                 0.0001, // min_profit_sol (from config)
             );
 
@@ -2059,10 +2222,12 @@ async fn execute_sandwich_opportunity(
 
     if paper_trading {
         // Paper trading - just log what we would do
-        info!("📝 PAPER SANDWICH | DEX: {} | Victim: {:.4} SOL | Profit Est: {:.4} SOL",
-              opportunity.dex_name,
-              opportunity.estimated_sol_value,
-              opportunity.estimated_sol_value * 0.02); // Assume 2% capture
+        info!(
+            "📝 PAPER SANDWICH | DEX: {} | Victim: {:.4} SOL | Profit Est: {:.4} SOL",
+            opportunity.dex_name,
+            opportunity.estimated_sol_value,
+            opportunity.estimated_sol_value * 0.02
+        ); // Assume 2% capture
 
         // Simulate execution time
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
@@ -2071,23 +2236,34 @@ async fn execute_sandwich_opportunity(
     }
 
     // Real sandwich execution with JITO bundles
-    info!("💰 REAL SANDWICH EXECUTION | DEX: {} | Victim: {:.4} SOL | Sig: {}",
-          opportunity.dex_name, opportunity.estimated_sol_value, &opportunity.signature[..20]);
+    info!(
+        "💰 REAL SANDWICH EXECUTION | DEX: {} | Victim: {:.4} SOL | Sig: {}",
+        opportunity.dex_name,
+        opportunity.estimated_sol_value,
+        &opportunity.signature[..20]
+    );
 
     // Position sizing: FIXED 2.0 SOL - Max aggression like professional MEV bots!
     // We use LARGER positions than victims to create maximum price impact
     let victim_size_sol = opportunity.estimated_sol_value;
-    let position_size_sol = 2.0;  // Always use our max firepower!
+    let position_size_sol = 2.0; // Always use our max firepower!
 
     info!("📊 Position sizing | Victim: {:.4} SOL | Our position: {:.4} SOL (FIXED MAX - pro MEV strategy)",
           victim_size_sol, position_size_sol);
 
     // SAFETY: Skip if position too small (under 0.01 SOL)
     if position_size_sol < 0.01 {
-        let _ = db_tracker.log_skipped(opportunity, &format!(
-            "Position too small: {:.4} SOL < 0.01 SOL", position_size_sol
-        ));
-        debug!("⏭️  Skipping sandwich - position too small: {:.4} SOL", position_size_sol);
+        let _ = db_tracker.log_skipped(
+            opportunity,
+            &format!(
+                "Position too small: {:.4} SOL < 0.01 SOL",
+                position_size_sol
+            ),
+        );
+        debug!(
+            "⏭️  Skipping sandwich - position too small: {:.4} SOL",
+            position_size_sol
+        );
         return Ok(false);
     }
 
@@ -2096,26 +2272,29 @@ async fn execute_sandwich_opportunity(
 
     // GROK 99% SUCCESS FORMULA - Calculate profitability based on OUR position size
     let enable_bonding_curve = std::env::var("ENABLE_BONDING_CURVE_DIRECT")
-        .unwrap_or_else(|_| "false".to_string()) == "true";
+        .unwrap_or_else(|_| "false".to_string())
+        == "true";
 
     // Pool liquidity with 15% downward adjustment for estimation errors
     let base_pool_liquidity = if enable_bonding_curve {
-        30.0  // ~30 SOL typical for bonding curve
+        30.0 // ~30 SOL typical for bonding curve
     } else {
-        80.0  // Post-migration pool size
+        80.0 // Post-migration pool size
     };
     let adjusted_pool_liquidity = base_pool_liquidity * 0.85;
 
     // Price impact with 25% slippage buffer (using OUR position size, not victim's!)
-    let base_price_impact_pct = (position_size_sol / (adjusted_pool_liquidity + position_size_sol / 2.0)) * 100.0;
+    let base_price_impact_pct =
+        (position_size_sol / (adjusted_pool_liquidity + position_size_sol / 2.0)) * 100.0;
     let estimated_price_impact_pct = base_price_impact_pct * 1.25;
 
     // Conservative profit capture: 15%
     let capture_percentage = 0.15;
-    let gross_profit = position_size_sol * (estimated_price_impact_pct / 100.0) * capture_percentage;
+    let gross_profit =
+        position_size_sol * (estimated_price_impact_pct / 100.0) * capture_percentage;
 
     // Updated fees for 99% success rate
-    let jito_fee = 0.002;  // 0.002 SOL for reliable landing
+    let jito_fee = 0.002; // 0.002 SOL for reliable landing
     let gas_fee = 0.0001;
     let base_total_fees = jito_fee + gas_fee;
 
@@ -2125,9 +2304,9 @@ async fn execute_sandwich_opportunity(
 
     // Volatility buffer
     let volatility_buffer = if enable_bonding_curve {
-        0.0003  // PumpFun: higher volatility
+        0.0003 // PumpFun: higher volatility
     } else {
-        0.0002  // Multi-DEX: more stable
+        0.0002 // Multi-DEX: more stable
     };
 
     // Net profit = gross - effective fees - volatility buffer
@@ -2135,9 +2314,9 @@ async fn execute_sandwich_opportunity(
 
     // Minimum profit thresholds
     let min_profit_threshold = if enable_bonding_curve {
-        0.003  // PumpFun: stricter
+        0.003 // PumpFun: stricter
     } else {
-        0.002  // Multi-DEX: slightly lower
+        0.002 // Multi-DEX: slightly lower
     };
 
     info!("💡 PROFITABILITY (99% Success) | Mode: {} | Our Position: {:.4} SOL | Pool: {:.1} SOL | Impact: {:.2}% | Gross: {:.6} SOL | Fees: {:.6} SOL | Volatility: {:.6} SOL | Net: {:.6} SOL | Min: {:.6} SOL",
@@ -2153,29 +2332,49 @@ async fn execute_sandwich_opportunity(
 
     // SAFETY: Skip if net profit below threshold
     if estimated_net_profit < min_profit_threshold {
-        let _ = db_tracker.log_skipped(opportunity, &format!(
-            "Net profit too low: {:.6} SOL < {:.6} SOL", estimated_net_profit, min_profit_threshold
-        ));
-        debug!("⏭️  Skipping sandwich - net profit too low: {:.6} SOL (need {:.6} SOL)",
-               estimated_net_profit, min_profit_threshold);
+        let _ = db_tracker.log_skipped(
+            opportunity,
+            &format!(
+                "Net profit too low: {:.6} SOL < {:.6} SOL",
+                estimated_net_profit, min_profit_threshold
+            ),
+        );
+        debug!(
+            "⏭️  Skipping sandwich - net profit too low: {:.6} SOL (need {:.6} SOL)",
+            estimated_net_profit, min_profit_threshold
+        );
         return Ok(false);
     }
 
     // Additional safety: Skip if swap > 50% of pool
     if position_size_sol > (base_pool_liquidity * 0.5) {
-        let _ = db_tracker.log_skipped(opportunity, &format!(
-            "Position too large: {:.2} SOL > 50% of {:.0} SOL pool", position_size_sol, base_pool_liquidity
-        ));
-        warn!("⚠️  Skipping: Our position too large ({:.2} SOL > 50% of {:.0} SOL pool)",
-              position_size_sol, base_pool_liquidity);
+        let _ = db_tracker.log_skipped(
+            opportunity,
+            &format!(
+                "Position too large: {:.2} SOL > 50% of {:.0} SOL pool",
+                position_size_sol, base_pool_liquidity
+            ),
+        );
+        warn!(
+            "⚠️  Skipping: Our position too large ({:.2} SOL > 50% of {:.0} SOL pool)",
+            position_size_sol, base_pool_liquidity
+        );
         return Ok(false);
     }
 
-    info!("✅ Sandwich profitable | Net profit: {:.6} SOL (after {:.6} SOL total fees)",
-          estimated_net_profit, effective_total_fees);
+    info!(
+        "✅ Sandwich profitable | Net profit: {:.6} SOL (after {:.6} SOL total fees)",
+        estimated_net_profit, effective_total_fees
+    );
 
     // Check if we have parsed transaction details (Raydium AMM V4 only for now)
-    if let (Some(pool_address_str), Some(_input_mint), Some(_output_mint), Some(swap_amount), Some(_min_out)) = (
+    if let (
+        Some(pool_address_str),
+        Some(_input_mint),
+        Some(_output_mint),
+        Some(swap_amount),
+        Some(_min_out),
+    ) = (
         &opportunity.pool_address,
         &opportunity.input_mint,
         &opportunity.output_mint,
@@ -2183,8 +2382,11 @@ async fn execute_sandwich_opportunity(
         opportunity.min_amount_out,
     ) {
         // We have transaction details! Try to build JITO bundle
-        info!("✅ Transaction details available | Pool: {} | Amount: {} lamports",
-              &pool_address_str[..8], swap_amount);
+        info!(
+            "✅ Transaction details available | Pool: {} | Amount: {} lamports",
+            &pool_address_str[..8],
+            swap_amount
+        );
 
         // Parse pool address
         let pool_pubkey = match Pubkey::from_str(pool_address_str) {
@@ -2196,7 +2398,11 @@ async fn execute_sandwich_opportunity(
         };
 
         // Fetch pool state from on-chain with DEX-routed fetching
-        info!("📡 Querying pool state for {} (DEX: {})", &pool_address_str[..8], opportunity.dex_name);
+        info!(
+            "📡 Querying pool state for {} (DEX: {})",
+            &pool_address_str[..8],
+            opportunity.dex_name
+        );
 
         let rpc_url = std::env::var("SOLANA_RPC_ENDPOINT")
             .unwrap_or_else(|_| "https://api.mainnet-beta.solana.com".to_string());
@@ -2205,21 +2411,28 @@ async fn execute_sandwich_opportunity(
 
         // 🔧 FIX #2: Use DEX-routed pool state fetcher instead of hardcoded Raydium V4
         // This auto-detects DEX type from account owner and routes to correct parser
-        let pool_state_enum = match crate::dex_pool_state::fetch_pool_state(&rpc_client, &pool_pubkey).await {
-            Ok(state) => state,
-            Err(e) => {
-                warn!("⚠️  Failed to fetch pool state: {}", e);
-                warn!("   DEX: {} | Pool: {}", opportunity.dex_name, pool_address_str);
-                warn!("   This could mean:");
-                warn!("   - Pool address is incorrect");
-                warn!("   - Pool account doesn't exist");
-                warn!("   - RPC connection issue");
-                warn!("   - Unsupported DEX type");
-                return Ok(false);
-            }
-        };
+        let pool_state_enum =
+            match crate::dex_pool_state::fetch_pool_state(&rpc_client, &pool_pubkey).await {
+                Ok(state) => state,
+                Err(e) => {
+                    warn!("⚠️  Failed to fetch pool state: {}", e);
+                    warn!(
+                        "   DEX: {} | Pool: {}",
+                        opportunity.dex_name, pool_address_str
+                    );
+                    warn!("   This could mean:");
+                    warn!("   - Pool address is incorrect");
+                    warn!("   - Pool account doesn't exist");
+                    warn!("   - RPC connection issue");
+                    warn!("   - Unsupported DEX type");
+                    return Ok(false);
+                }
+            };
 
-        info!("✅ Pool state fetched successfully! DEX: {:?}", pool_state_enum.dex_type());
+        info!(
+            "✅ Pool state fetched successfully! DEX: {:?}",
+            pool_state_enum.dex_type()
+        );
 
         // For now, only execute on Raydium AMM V4 (other DEXs need swap builder implementation)
         // This prevents "Account not owned by Raydium V4" errors on other DEXs
@@ -2232,158 +2445,182 @@ async fn execute_sandwich_opportunity(
                 info!("   Coin Mint: {}", pool_state.coin_mint);
                 info!("   PC Mint: {}", pool_state.pc_mint);
 
-        // Get or create our token accounts for both mints
-        info!("🔍 Getting/creating token accounts for sandwich...");
+                // Get or create our token accounts for both mints
+                info!("🔍 Getting/creating token accounts for sandwich...");
 
-        let token_account_manager = crate::token_account_manager::TokenAccountManager::new(rpc_url);
+                let token_account_manager =
+                    crate::token_account_manager::TokenAccountManager::new(rpc_url);
 
-        // We need ATAs for both coin_mint and pc_mint
-        // coin_mint is typically the token, pc_mint is typically SOL (WSOL)
-        let (coin_ata, pc_ata) = match token_account_manager.get_or_create_swap_atas(
-            trading_keypair,
-            &pool_state.coin_mint,
-            &pool_state.pc_mint,
-        ) {
-            Ok(atas) => atas,
-            Err(e) => {
-                warn!("⚠️  Failed to get/create token accounts: {}", e);
-                warn!("   This could mean:");
-                warn!("   - RPC connection issue");
-                warn!("   - Insufficient SOL for ATA creation (need ~0.002 SOL)");
-                warn!("   - Transaction failed");
-                return Ok(false);
-            }
-        };
+                // We need ATAs for both coin_mint and pc_mint
+                // coin_mint is typically the token, pc_mint is typically SOL (WSOL)
+                let (coin_ata, pc_ata) = match token_account_manager.get_or_create_swap_atas(
+                    trading_keypair,
+                    &pool_state.coin_mint,
+                    &pool_state.pc_mint,
+                ) {
+                    Ok(atas) => atas,
+                    Err(e) => {
+                        warn!("⚠️  Failed to get/create token accounts: {}", e);
+                        warn!("   This could mean:");
+                        warn!("   - RPC connection issue");
+                        warn!("   - Insufficient SOL for ATA creation (need ~0.002 SOL)");
+                        warn!("   - Transaction failed");
+                        return Ok(false);
+                    }
+                };
 
-        info!("✅ Token accounts ready!");
-        info!("   Coin ATA ({}): {}", pool_state.coin_mint, coin_ata);
-        info!("   PC ATA ({}): {}", pool_state.pc_mint, pc_ata);
+                info!("✅ Token accounts ready!");
+                info!("   Coin ATA ({}): {}", pool_state.coin_mint, coin_ata);
+                info!("   PC ATA ({}): {}", pool_state.pc_mint, pc_ata);
 
-        // Build back-running arbitrage transaction
-        // Strategy: Victim just bought token → Price increased → We sell into the pump
-        info!("🏗️  Building back-running arbitrage transaction...");
+                // Build back-running arbitrage transaction
+                // Strategy: Victim just bought token → Price increased → We sell into the pump
+                info!("🏗️  Building back-running arbitrage transaction...");
 
-        // Determine swap direction based on victim's trade
-        // If victim bought token (SOL → Token), we sell token (Token → SOL)
-        // If victim sold token (Token → SOL), we buy token (SOL → Token)
+                // Determine swap direction based on victim's trade
+                // If victim bought token (SOL → Token), we sell token (Token → SOL)
+                // If victim sold token (Token → SOL), we buy token (SOL → Token)
 
-        // For now, assume victim bought (most common case)
-        // TODO: Parse victim's swap direction from transaction details
+                // For now, assume victim bought (most common case)
+                // TODO: Parse victim's swap direction from transaction details
 
-        // Convert position size to lamports
-        let position_lamports = (position_size_sol * 1_000_000_000.0) as u64;
+                // Convert position size to lamports
+                let position_lamports = (position_size_sol * 1_000_000_000.0) as u64;
 
-        // Calculate slippage (0.5% for tight execution)
-        let slippage = 0.005; // 0.5%
+                // Calculate slippage (0.5% for tight execution)
+                let slippage = 0.005; // 0.5%
 
-        // BACK-RUN ARBITRAGE: Sell into victim's price pump
-        // Victim bought token → Price went up → We sell at inflated price
-        info!("🔴 Building arbitrage swap (Token → SOL)");
-        info!("   Strategy: Sell into victim's price impact");
-        info!("   Position: {:.6} SOL worth of tokens", position_size_sol);
+                // BACK-RUN ARBITRAGE: Sell into victim's price pump
+                // Victim bought token → Price went up → We sell at inflated price
+                info!("🔴 Building arbitrage swap (Token → SOL)");
+                info!("   Strategy: Sell into victim's price impact");
+                info!("   Position: {:.6} SOL worth of tokens", position_size_sol);
 
-        // Estimate tokens needed (simplified - should query actual pool reserves)
-        let estimated_tokens_to_sell = position_lamports; // Rough 1:1 estimate
-        let expected_profit_pct = estimated_net_profit / position_size_sol;
-        let min_sol_out = (position_lamports as f64 * (1.0 + expected_profit_pct - slippage)) as u64;
+                // Estimate tokens needed (simplified - should query actual pool reserves)
+                let estimated_tokens_to_sell = position_lamports; // Rough 1:1 estimate
+                let expected_profit_pct = estimated_net_profit / position_size_sol;
+                let min_sol_out =
+                    (position_lamports as f64 * (1.0 + expected_profit_pct - slippage)) as u64;
 
-        info!("   Selling ~{} tokens", estimated_tokens_to_sell);
-        info!("   Min SOL out: {:.6} SOL ({} lamports)", min_sol_out as f64 / 1e9, min_sol_out);
-        info!("   Expected profit: {:.2}%", expected_profit_pct * 100.0);
+                info!("   Selling ~{} tokens", estimated_tokens_to_sell);
+                info!(
+                    "   Min SOL out: {:.6} SOL ({} lamports)",
+                    min_sol_out as f64 / 1e9,
+                    min_sol_out
+                );
+                info!("   Expected profit: {:.2}%", expected_profit_pct * 100.0);
 
-        let arbitrage_ix = match crate::raydium_swap_builder::build_backrun_instruction(
-            &pool_state,
-            &coin_ata, // Source: our token account (sell tokens)
-            &pc_ata,   // Dest: our SOL account (receive SOL)
-            &trading_keypair.pubkey(),
-            estimated_tokens_to_sell,
-            min_sol_out,
-        ) {
-            Ok(ix) => ix,
-            Err(e) => {
-                warn!("⚠️  Failed to build arbitrage instruction: {}", e);
-                return Ok(false);
-            }
-        };
+                let arbitrage_ix = match crate::raydium_swap_builder::build_backrun_instruction(
+                    &pool_state,
+                    &coin_ata, // Source: our token account (sell tokens)
+                    &pc_ata,   // Dest: our SOL account (receive SOL)
+                    &trading_keypair.pubkey(),
+                    estimated_tokens_to_sell,
+                    min_sol_out,
+                ) {
+                    Ok(ix) => ix,
+                    Err(e) => {
+                        warn!("⚠️  Failed to build arbitrage instruction: {}", e);
+                        return Ok(false);
+                    }
+                };
 
-        info!("✅ Arbitrage instruction built successfully!");
-        info!("📦 Building JITO bundle: [arbitrage only]");
+                info!("✅ Arbitrage instruction built successfully!");
+                info!("📦 Building JITO bundle: [arbitrage only]");
 
-        // Get recent blockhash for transaction
-        let recent_blockhash = match rpc_client.get_latest_blockhash() {
-            Ok(blockhash) => blockhash,
-            Err(e) => {
-                warn!("⚠️  Failed to get recent blockhash: {}", e);
-                return Ok(false);
-            }
-        };
+                // Get recent blockhash for transaction
+                let recent_blockhash = match rpc_client.get_latest_blockhash() {
+                    Ok(blockhash) => blockhash,
+                    Err(e) => {
+                        warn!("⚠️  Failed to get recent blockhash: {}", e);
+                        return Ok(false);
+                    }
+                };
 
-        // Build arbitrage transaction (single tx, not a sandwich)
-        let arbitrage_tx = solana_sdk::transaction::Transaction::new_signed_with_payer(
-            &[arbitrage_ix],
-            Some(&trading_keypair.pubkey()),
-            &[trading_keypair],
-            recent_blockhash,
-        );
-
-        info!("✅ Arbitrage transaction built and signed!");
-        info!("   Transaction size: {} bytes", bincode::serialize(&arbitrage_tx).unwrap_or_default().len());
-
-        // Calculate JITO tip based on expected profit
-        // Use the JITO tip portion from estimated_fees (0.0005 SOL - reduced for back-running)
-        let jito_tip_sol = 0.0005; // JITO tip portion from estimated_fees
-        let jito_tip_lamports = (jito_tip_sol * 1_000_000_000.0) as u64;
-        info!("💰 JITO tip: {:.6} SOL ({} lamports)", jito_tip_sol, jito_tip_lamports);
-
-        // Submit bundle to JITO
-        info!("🚀 Submitting JITO bundle...");
-
-        // 🔥 LIVE TRADING ENABLED 🔥
-        info!("🚀 Submitting back-running arbitrage to JITO...");
-        info!("   Pool: {}", &pool_address_str[..8]);
-        info!("   Position: {:.4} SOL", position_size_sol);
-        info!("   Expected profit: {:.6} SOL ({:.2}%)", estimated_net_profit, expected_profit_pct * 100.0);
-        info!("   Strategy: Sell into victim's price pump");
-        info!("   Bundle: [single arbitrage tx]");
-
-        let bundle_result = jito_client.submit_bundle(
-            vec![arbitrage_tx],  // Single transaction, not a sandwich
-            Some(jito_tip_lamports),
-        ).await;
-
-        match bundle_result {
-            Ok(bundle_id) => {
-                info!("✅ Arbitrage bundle submitted! ID: {}", bundle_id);
-                info!("   Waiting for confirmation...");
-
-                // Wait a bit for bundle to land
-                tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
-
-                // Log execution to database
-                let execution_latency_ms = 5.4;  // Estimated execution latency
-                let jito_tip_sol = jito_tip_lamports as f64 / 1_000_000_000.0;
-                let _ = db_tracker.log_executed(
-                    &opportunity.signature,
-                    estimated_net_profit,  // Actual profit (will improve with on-chain verification)
-                    effective_total_fees,
-                    jito_tip_sol,
-                    position_size_sol,
-                    &bundle_id,
-                    execution_latency_ms,
+                // Build arbitrage transaction (single tx, not a sandwich)
+                let arbitrage_tx = solana_sdk::transaction::Transaction::new_signed_with_payer(
+                    &[arbitrage_ix],
+                    Some(&trading_keypair.pubkey()),
+                    &[trading_keypair],
+                    recent_blockhash,
                 );
 
-                debug!("📊 Logged execution to database: {} | Profit: {:.6} SOL",
-                      &opportunity.signature[..8], estimated_net_profit);
+                info!("✅ Arbitrage transaction built and signed!");
+                info!(
+                    "   Transaction size: {} bytes",
+                    bincode::serialize(&arbitrage_tx).unwrap_or_default().len()
+                );
 
-                return Ok(true);
-            }
-            Err(e) => {
-                let _ = db_tracker.log_failed(&opportunity.signature, &format!("JITO bundle failed: {}", e));
-                warn!("⚠️  Bundle submission failed: {}", e);
-                return Ok(false);
-            }
-        }
-            }  // End Raydium AMM V4 match arm
+                // Calculate JITO tip based on expected profit
+                // Use the JITO tip portion from estimated_fees (0.0005 SOL - reduced for back-running)
+                let jito_tip_sol = 0.0005; // JITO tip portion from estimated_fees
+                let jito_tip_lamports = (jito_tip_sol * 1_000_000_000.0) as u64;
+                info!(
+                    "💰 JITO tip: {:.6} SOL ({} lamports)",
+                    jito_tip_sol, jito_tip_lamports
+                );
+
+                // Submit bundle to JITO
+                info!("🚀 Submitting JITO bundle...");
+
+                // 🔥 LIVE TRADING ENABLED 🔥
+                info!("🚀 Submitting back-running arbitrage to JITO...");
+                info!("   Pool: {}", &pool_address_str[..8]);
+                info!("   Position: {:.4} SOL", position_size_sol);
+                info!(
+                    "   Expected profit: {:.6} SOL ({:.2}%)",
+                    estimated_net_profit,
+                    expected_profit_pct * 100.0
+                );
+                info!("   Strategy: Sell into victim's price pump");
+                info!("   Bundle: [single arbitrage tx]");
+
+                let bundle_result = jito_client
+                    .submit_bundle(
+                        vec![arbitrage_tx], // Single transaction, not a sandwich
+                        Some(jito_tip_lamports),
+                    )
+                    .await;
+
+                match bundle_result {
+                    Ok(bundle_id) => {
+                        info!("✅ Arbitrage bundle submitted! ID: {}", bundle_id);
+                        info!("   Waiting for confirmation...");
+
+                        // Wait a bit for bundle to land
+                        tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+
+                        // Log execution to database
+                        let execution_latency_ms = 5.4; // Estimated execution latency
+                        let jito_tip_sol = jito_tip_lamports as f64 / 1_000_000_000.0;
+                        let _ = db_tracker.log_executed(
+                            &opportunity.signature,
+                            estimated_net_profit, // Actual profit (will improve with on-chain verification)
+                            effective_total_fees,
+                            jito_tip_sol,
+                            position_size_sol,
+                            &bundle_id,
+                            execution_latency_ms,
+                        );
+
+                        debug!(
+                            "📊 Logged execution to database: {} | Profit: {:.6} SOL",
+                            &opportunity.signature[..8],
+                            estimated_net_profit
+                        );
+
+                        return Ok(true);
+                    }
+                    Err(e) => {
+                        let _ = db_tracker.log_failed(
+                            &opportunity.signature,
+                            &format!("JITO bundle failed: {}", e),
+                        );
+                        warn!("⚠️  Bundle submission failed: {}", e);
+                        return Ok(false);
+                    }
+                }
+            } // End Raydium AMM V4 match arm
 
             // Raydium CLMM - Phase 2 execution
             crate::dex_pool_state::DexPoolState::RaydiumClmm(pool_state) => {
@@ -2394,15 +2631,20 @@ async fn execute_sandwich_opportunity(
                 info!("   Sqrt Price: {}", pool_state.sqrt_price_x64);
 
                 // Get or create token accounts
-                let token_account_manager = crate::token_account_manager::TokenAccountManager::new(rpc_url.clone());
-                let (token_a_ata, token_b_ata) = match token_account_manager.get_or_create_swap_atas(
-                    trading_keypair,
-                    &pool_state.token_mint_a,
-                    &pool_state.token_mint_b,
-                ) {
+                let token_account_manager =
+                    crate::token_account_manager::TokenAccountManager::new(rpc_url.clone());
+                let (token_a_ata, token_b_ata) = match token_account_manager
+                    .get_or_create_swap_atas(
+                        trading_keypair,
+                        &pool_state.token_mint_a,
+                        &pool_state.token_mint_b,
+                    ) {
                     Ok(atas) => atas,
                     Err(e) => {
-                        let _ = db_tracker.log_skipped(opportunity, &format!("Failed to create token accounts: {}", e));
+                        let _ = db_tracker.log_skipped(
+                            opportunity,
+                            &format!("Failed to create token accounts: {}", e),
+                        );
                         warn!("⚠️  Failed to get/create token accounts: {}", e);
                         return Ok(false);
                     }
@@ -2416,7 +2658,8 @@ async fn execute_sandwich_opportunity(
                 let position_lamports = (position_size_sol * 1_000_000_000.0) as u64;
                 let expected_profit_pct = estimated_net_profit / position_size_sol;
                 let slippage = 0.005; // 0.5%
-                let min_sol_out = (position_lamports as f64 * (1.0 + expected_profit_pct - slippage)) as u64;
+                let min_sol_out =
+                    (position_lamports as f64 * (1.0 + expected_profit_pct - slippage)) as u64;
 
                 let arbitrage_ix = match crate::raydium_clmm_swap::build_clmm_backrun_instruction(
                     &pool_state,
@@ -2425,11 +2668,14 @@ async fn execute_sandwich_opportunity(
                     &trading_keypair.pubkey(),
                     position_lamports,
                     min_sol_out,
-                    true,  // is_base_input - assume selling token A for token B
+                    true, // is_base_input - assume selling token A for token B
                 ) {
                     Ok(ix) => ix,
                     Err(e) => {
-                        let _ = db_tracker.log_failed(&opportunity.signature, &format!("Failed to build CLMM swap: {}", e));
+                        let _ = db_tracker.log_failed(
+                            &opportunity.signature,
+                            &format!("Failed to build CLMM swap: {}", e),
+                        );
                         warn!("⚠️  Failed to build CLMM arbitrage instruction: {}", e);
                         return Ok(false);
                     }
@@ -2441,7 +2687,10 @@ async fn execute_sandwich_opportunity(
                 let recent_blockhash = match rpc_client.get_latest_blockhash() {
                     Ok(blockhash) => blockhash,
                     Err(e) => {
-                        let _ = db_tracker.log_failed(&opportunity.signature, &format!("Failed to get blockhash: {}", e));
+                        let _ = db_tracker.log_failed(
+                            &opportunity.signature,
+                            &format!("Failed to get blockhash: {}", e),
+                        );
                         warn!("⚠️  Failed to get recent blockhash: {}", e);
                         return Ok(false);
                     }
@@ -2459,10 +2708,9 @@ async fn execute_sandwich_opportunity(
                 info!("💰 JITO tip: {:.6} SOL", jito_tip_sol);
 
                 info!("🚀 Submitting Raydium CLMM arbitrage to JITO...");
-                let bundle_result = jito_client.submit_bundle(
-                    vec![arbitrage_tx],
-                    Some(jito_tip_lamports),
-                ).await;
+                let bundle_result = jito_client
+                    .submit_bundle(vec![arbitrage_tx], Some(jito_tip_lamports))
+                    .await;
 
                 match bundle_result {
                     Ok(bundle_id) => {
@@ -2484,7 +2732,10 @@ async fn execute_sandwich_opportunity(
                         return Ok(true);
                     }
                     Err(e) => {
-                        let _ = db_tracker.log_failed(&opportunity.signature, &format!("JITO bundle failed: {}", e));
+                        let _ = db_tracker.log_failed(
+                            &opportunity.signature,
+                            &format!("JITO bundle failed: {}", e),
+                        );
                         warn!("⚠️  Bundle submission failed: {}", e);
                         return Ok(false);
                     }
@@ -2498,15 +2749,20 @@ async fn execute_sandwich_opportunity(
                 info!("   Token 0: {}", pool_state.token_0_mint);
                 info!("   Token 1: {}", pool_state.token_1_mint);
 
-                let token_account_manager = crate::token_account_manager::TokenAccountManager::new(rpc_url.clone());
-                let (token_0_ata, token_1_ata) = match token_account_manager.get_or_create_swap_atas(
-                    trading_keypair,
-                    &pool_state.token_0_mint,
-                    &pool_state.token_1_mint,
-                ) {
+                let token_account_manager =
+                    crate::token_account_manager::TokenAccountManager::new(rpc_url.clone());
+                let (token_0_ata, token_1_ata) = match token_account_manager
+                    .get_or_create_swap_atas(
+                        trading_keypair,
+                        &pool_state.token_0_mint,
+                        &pool_state.token_1_mint,
+                    ) {
                     Ok(atas) => atas,
                     Err(e) => {
-                        let _ = db_tracker.log_skipped(opportunity, &format!("Failed to create token accounts: {}", e));
+                        let _ = db_tracker.log_skipped(
+                            opportunity,
+                            &format!("Failed to create token accounts: {}", e),
+                        );
                         warn!("⚠️  Failed to get/create token accounts: {}", e);
                         return Ok(false);
                     }
@@ -2515,7 +2771,8 @@ async fn execute_sandwich_opportunity(
                 let position_lamports = (position_size_sol * 1_000_000_000.0) as u64;
                 let expected_profit_pct = estimated_net_profit / position_size_sol;
                 let slippage = 0.005;
-                let min_sol_out = (position_lamports as f64 * (1.0 + expected_profit_pct - slippage)) as u64;
+                let min_sol_out =
+                    (position_lamports as f64 * (1.0 + expected_profit_pct - slippage)) as u64;
 
                 let arbitrage_ix = match crate::raydium_cpmm_swap::build_cpmm_backrun_instruction(
                     &pool_state,
@@ -2527,7 +2784,10 @@ async fn execute_sandwich_opportunity(
                 ) {
                     Ok(ix) => ix,
                     Err(e) => {
-                        let _ = db_tracker.log_failed(&opportunity.signature, &format!("Failed to build CPMM swap: {}", e));
+                        let _ = db_tracker.log_failed(
+                            &opportunity.signature,
+                            &format!("Failed to build CPMM swap: {}", e),
+                        );
                         warn!("⚠️  Failed to build CPMM arbitrage instruction: {}", e);
                         return Ok(false);
                     }
@@ -2536,7 +2796,10 @@ async fn execute_sandwich_opportunity(
                 let recent_blockhash = match rpc_client.get_latest_blockhash() {
                     Ok(blockhash) => blockhash,
                     Err(e) => {
-                        let _ = db_tracker.log_failed(&opportunity.signature, &format!("Failed to get blockhash: {}", e));
+                        let _ = db_tracker.log_failed(
+                            &opportunity.signature,
+                            &format!("Failed to get blockhash: {}", e),
+                        );
                         warn!("⚠️  Failed to get recent blockhash: {}", e);
                         return Ok(false);
                     }
@@ -2553,7 +2816,9 @@ async fn execute_sandwich_opportunity(
                 let jito_tip_lamports = (jito_tip_sol * 1_000_000_000.0) as u64;
 
                 info!("🚀 Submitting Raydium CPMM arbitrage to JITO...");
-                let bundle_result = jito_client.submit_bundle(vec![arbitrage_tx], Some(jito_tip_lamports)).await;
+                let bundle_result = jito_client
+                    .submit_bundle(vec![arbitrage_tx], Some(jito_tip_lamports))
+                    .await;
 
                 match bundle_result {
                     Ok(bundle_id) => {
@@ -2572,7 +2837,10 @@ async fn execute_sandwich_opportunity(
                         return Ok(true);
                     }
                     Err(e) => {
-                        let _ = db_tracker.log_failed(&opportunity.signature, &format!("JITO bundle failed: {}", e));
+                        let _ = db_tracker.log_failed(
+                            &opportunity.signature,
+                            &format!("JITO bundle failed: {}", e),
+                        );
                         warn!("⚠️  Bundle submission failed: {}", e);
                         return Ok(false);
                     }
@@ -2586,15 +2854,20 @@ async fn execute_sandwich_opportunity(
                 info!("   Token A: {}", pool_state.token_mint_a);
                 info!("   Token B: {}", pool_state.token_mint_b);
 
-                let token_account_manager = crate::token_account_manager::TokenAccountManager::new(rpc_url.clone());
-                let (token_a_ata, token_b_ata) = match token_account_manager.get_or_create_swap_atas(
-                    trading_keypair,
-                    &pool_state.token_mint_a,
-                    &pool_state.token_mint_b,
-                ) {
+                let token_account_manager =
+                    crate::token_account_manager::TokenAccountManager::new(rpc_url.clone());
+                let (token_a_ata, token_b_ata) = match token_account_manager
+                    .get_or_create_swap_atas(
+                        trading_keypair,
+                        &pool_state.token_mint_a,
+                        &pool_state.token_mint_b,
+                    ) {
                     Ok(atas) => atas,
                     Err(e) => {
-                        let _ = db_tracker.log_skipped(opportunity, &format!("Failed to create token accounts: {}", e));
+                        let _ = db_tracker.log_skipped(
+                            opportunity,
+                            &format!("Failed to create token accounts: {}", e),
+                        );
                         warn!("⚠️  Failed to get/create token accounts: {}", e);
                         return Ok(false);
                     }
@@ -2603,29 +2876,37 @@ async fn execute_sandwich_opportunity(
                 let position_lamports = (position_size_sol * 1_000_000_000.0) as u64;
                 let expected_profit_pct = estimated_net_profit / position_size_sol;
                 let slippage = 0.005;
-                let min_sol_out = (position_lamports as f64 * (1.0 + expected_profit_pct - slippage)) as u64;
+                let min_sol_out =
+                    (position_lamports as f64 * (1.0 + expected_profit_pct - slippage)) as u64;
 
-                let arbitrage_ix = match crate::orca_whirlpool_swap::build_whirlpool_backrun_instruction(
-                    &pool_state,
-                    &token_a_ata,
-                    &token_b_ata,
-                    &trading_keypair.pubkey(),
-                    position_lamports,
-                    min_sol_out,
-                    true,  // a_to_b: selling tokens back to SOL
-                ) {
-                    Ok(ix) => ix,
-                    Err(e) => {
-                        let _ = db_tracker.log_failed(&opportunity.signature, &format!("Failed to build Orca swap: {}", e));
-                        warn!("⚠️  Failed to build Orca arbitrage instruction: {}", e);
-                        return Ok(false);
-                    }
-                };
+                let arbitrage_ix =
+                    match crate::orca_whirlpool_swap::build_whirlpool_backrun_instruction(
+                        &pool_state,
+                        &token_a_ata,
+                        &token_b_ata,
+                        &trading_keypair.pubkey(),
+                        position_lamports,
+                        min_sol_out,
+                        true, // a_to_b: selling tokens back to SOL
+                    ) {
+                        Ok(ix) => ix,
+                        Err(e) => {
+                            let _ = db_tracker.log_failed(
+                                &opportunity.signature,
+                                &format!("Failed to build Orca swap: {}", e),
+                            );
+                            warn!("⚠️  Failed to build Orca arbitrage instruction: {}", e);
+                            return Ok(false);
+                        }
+                    };
 
                 let recent_blockhash = match rpc_client.get_latest_blockhash() {
                     Ok(blockhash) => blockhash,
                     Err(e) => {
-                        let _ = db_tracker.log_failed(&opportunity.signature, &format!("Failed to get blockhash: {}", e));
+                        let _ = db_tracker.log_failed(
+                            &opportunity.signature,
+                            &format!("Failed to get blockhash: {}", e),
+                        );
                         return Ok(false);
                     }
                 };
@@ -2639,7 +2920,9 @@ async fn execute_sandwich_opportunity(
 
                 let jito_tip_lamports = 500_000u64;
                 info!("🚀 Submitting Orca Whirlpool arbitrage to JITO...");
-                let bundle_result = jito_client.submit_bundle(vec![arbitrage_tx], Some(jito_tip_lamports)).await;
+                let bundle_result = jito_client
+                    .submit_bundle(vec![arbitrage_tx], Some(jito_tip_lamports))
+                    .await;
 
                 match bundle_result {
                     Ok(bundle_id) => {
@@ -2657,7 +2940,10 @@ async fn execute_sandwich_opportunity(
                         return Ok(true);
                     }
                     Err(e) => {
-                        let _ = db_tracker.log_failed(&opportunity.signature, &format!("JITO bundle failed: {}", e));
+                        let _ = db_tracker.log_failed(
+                            &opportunity.signature,
+                            &format!("JITO bundle failed: {}", e),
+                        );
                         warn!("⚠️  Bundle submission failed: {}", e);
                         return Ok(false);
                     }
@@ -2671,15 +2957,20 @@ async fn execute_sandwich_opportunity(
                 info!("   Token X: {}", pool_state.token_x_mint);
                 info!("   Token Y: {}", pool_state.token_y_mint);
 
-                let token_account_manager = crate::token_account_manager::TokenAccountManager::new(rpc_url.clone());
-                let (token_x_ata, token_y_ata) = match token_account_manager.get_or_create_swap_atas(
-                    trading_keypair,
-                    &pool_state.token_x_mint,
-                    &pool_state.token_y_mint,
-                ) {
+                let token_account_manager =
+                    crate::token_account_manager::TokenAccountManager::new(rpc_url.clone());
+                let (token_x_ata, token_y_ata) = match token_account_manager
+                    .get_or_create_swap_atas(
+                        trading_keypair,
+                        &pool_state.token_x_mint,
+                        &pool_state.token_y_mint,
+                    ) {
                     Ok(atas) => atas,
                     Err(e) => {
-                        let _ = db_tracker.log_skipped(opportunity, &format!("Failed to create token accounts: {}", e));
+                        let _ = db_tracker.log_skipped(
+                            opportunity,
+                            &format!("Failed to create token accounts: {}", e),
+                        );
                         warn!("⚠️  Failed to get/create token accounts: {}", e);
                         return Ok(false);
                     }
@@ -2688,7 +2979,8 @@ async fn execute_sandwich_opportunity(
                 let position_lamports = (position_size_sol * 1_000_000_000.0) as u64;
                 let expected_profit_pct = estimated_net_profit / position_size_sol;
                 let slippage = 0.005;
-                let min_sol_out = (position_lamports as f64 * (1.0 + expected_profit_pct - slippage)) as u64;
+                let min_sol_out =
+                    (position_lamports as f64 * (1.0 + expected_profit_pct - slippage)) as u64;
 
                 let arbitrage_ix = match crate::meteora_dlmm_swap::build_dlmm_backrun_instruction(
                     &pool_state,
@@ -2700,7 +2992,10 @@ async fn execute_sandwich_opportunity(
                 ) {
                     Ok(ix) => ix,
                     Err(e) => {
-                        let _ = db_tracker.log_failed(&opportunity.signature, &format!("Failed to build Meteora swap: {}", e));
+                        let _ = db_tracker.log_failed(
+                            &opportunity.signature,
+                            &format!("Failed to build Meteora swap: {}", e),
+                        );
                         warn!("⚠️  Failed to build Meteora arbitrage instruction: {}", e);
                         return Ok(false);
                     }
@@ -2709,7 +3004,10 @@ async fn execute_sandwich_opportunity(
                 let recent_blockhash = match rpc_client.get_latest_blockhash() {
                     Ok(blockhash) => blockhash,
                     Err(e) => {
-                        let _ = db_tracker.log_failed(&opportunity.signature, &format!("Failed to get blockhash: {}", e));
+                        let _ = db_tracker.log_failed(
+                            &opportunity.signature,
+                            &format!("Failed to get blockhash: {}", e),
+                        );
                         return Ok(false);
                     }
                 };
@@ -2723,7 +3021,9 @@ async fn execute_sandwich_opportunity(
 
                 let jito_tip_lamports = 500_000u64;
                 info!("🚀 Submitting Meteora DLMM arbitrage to JITO...");
-                let bundle_result = jito_client.submit_bundle(vec![arbitrage_tx], Some(jito_tip_lamports)).await;
+                let bundle_result = jito_client
+                    .submit_bundle(vec![arbitrage_tx], Some(jito_tip_lamports))
+                    .await;
 
                 match bundle_result {
                     Ok(bundle_id) => {
@@ -2741,7 +3041,10 @@ async fn execute_sandwich_opportunity(
                         return Ok(true);
                     }
                     Err(e) => {
-                        let _ = db_tracker.log_failed(&opportunity.signature, &format!("JITO bundle failed: {}", e));
+                        let _ = db_tracker.log_failed(
+                            &opportunity.signature,
+                            &format!("JITO bundle failed: {}", e),
+                        );
                         warn!("⚠️  Bundle submission failed: {}", e);
                         return Ok(false);
                     }
@@ -2754,8 +3057,12 @@ async fn execute_sandwich_opportunity(
                 info!("   Curve: {}", pool_state.bonding_curve);
                 info!("   Token Mint: {}", pool_state.token_mint);
 
-                let token_account_manager = crate::token_account_manager::TokenAccountManager::new(rpc_url.clone());
-                let wsol_mint = solana_sdk::pubkey::Pubkey::from_str("So11111111111111111111111111111111111111112").unwrap();
+                let token_account_manager =
+                    crate::token_account_manager::TokenAccountManager::new(rpc_url.clone());
+                let wsol_mint = solana_sdk::pubkey::Pubkey::from_str(
+                    "So11111111111111111111111111111111111111112",
+                )
+                .unwrap();
                 let (token_ata, wsol_ata) = match token_account_manager.get_or_create_swap_atas(
                     trading_keypair,
                     &pool_state.token_mint,
@@ -2763,7 +3070,10 @@ async fn execute_sandwich_opportunity(
                 ) {
                     Ok(atas) => atas,
                     Err(e) => {
-                        let _ = db_tracker.log_skipped(opportunity, &format!("Failed to create token accounts: {}", e));
+                        let _ = db_tracker.log_skipped(
+                            opportunity,
+                            &format!("Failed to create token accounts: {}", e),
+                        );
                         warn!("⚠️  Failed to get/create token accounts: {}", e);
                         return Ok(false);
                     }
@@ -2772,7 +3082,8 @@ async fn execute_sandwich_opportunity(
                 let position_lamports = (position_size_sol * 1_000_000_000.0) as u64;
                 let expected_profit_pct = estimated_net_profit / position_size_sol;
                 let slippage = 0.005;
-                let min_sol_out = (position_lamports as f64 * (1.0 + expected_profit_pct - slippage)) as u64;
+                let min_sol_out =
+                    (position_lamports as f64 * (1.0 + expected_profit_pct - slippage)) as u64;
 
                 let arbitrage_ix = match crate::pumpswap_swap::build_pumpswap_backrun_instruction(
                     &pool_state,
@@ -2783,7 +3094,10 @@ async fn execute_sandwich_opportunity(
                 ) {
                     Ok(ix) => ix,
                     Err(e) => {
-                        let _ = db_tracker.log_failed(&opportunity.signature, &format!("Failed to build PumpSwap swap: {}", e));
+                        let _ = db_tracker.log_failed(
+                            &opportunity.signature,
+                            &format!("Failed to build PumpSwap swap: {}", e),
+                        );
                         warn!("⚠️  Failed to build PumpSwap arbitrage instruction: {}", e);
                         return Ok(false);
                     }
@@ -2792,7 +3106,10 @@ async fn execute_sandwich_opportunity(
                 let recent_blockhash = match rpc_client.get_latest_blockhash() {
                     Ok(blockhash) => blockhash,
                     Err(e) => {
-                        let _ = db_tracker.log_failed(&opportunity.signature, &format!("Failed to get blockhash: {}", e));
+                        let _ = db_tracker.log_failed(
+                            &opportunity.signature,
+                            &format!("Failed to get blockhash: {}", e),
+                        );
                         return Ok(false);
                     }
                 };
@@ -2806,7 +3123,9 @@ async fn execute_sandwich_opportunity(
 
                 let jito_tip_lamports = 500_000u64;
                 info!("🚀 Submitting PumpSwap arbitrage to JITO...");
-                let bundle_result = jito_client.submit_bundle(vec![arbitrage_tx], Some(jito_tip_lamports)).await;
+                let bundle_result = jito_client
+                    .submit_bundle(vec![arbitrage_tx], Some(jito_tip_lamports))
+                    .await;
 
                 match bundle_result {
                     Ok(bundle_id) => {
@@ -2824,20 +3143,26 @@ async fn execute_sandwich_opportunity(
                         return Ok(true);
                     }
                     Err(e) => {
-                        let _ = db_tracker.log_failed(&opportunity.signature, &format!("JITO bundle failed: {}", e));
+                        let _ = db_tracker.log_failed(
+                            &opportunity.signature,
+                            &format!("JITO bundle failed: {}", e),
+                        );
                         warn!("⚠️  Bundle submission failed: {}", e);
                         return Ok(false);
                     }
                 }
             }
-        }  // End DEX type match
+        } // End DEX type match
     }
 
     // MULTI-DEX EXECUTION: Direct JITO submission for all DEX types
     // For DEXs other than Raydium AMM V4, we execute using a generic approach
     info!("🚀 LIVE EXECUTION: {} swap via JITO", opportunity.dex_name);
     info!("   Strategy: Direct DEX execution (no aggregator routing)");
-    info!("   Position: {:.4} SOL | Expected profit: {:.6} SOL", position_size_sol, estimated_net_profit);
+    info!(
+        "   Position: {:.4} SOL | Expected profit: {:.6} SOL",
+        position_size_sol, estimated_net_profit
+    );
 
     // Extract token mint from pool address
     // For most DEXs, the pool address contains or relates to the token mint
@@ -2861,18 +3186,27 @@ async fn execute_sandwich_opportunity(
     } else {
         let _ = db_tracker.log_skipped(opportunity, "No pool address");
         warn!("⚠️  No pool address in opportunity");
-        warn!("   DEX: {} - Cannot execute without pool info", opportunity.dex_name);
+        warn!(
+            "   DEX: {} - Cannot execute without pool info",
+            opportunity.dex_name
+        );
         return Ok(false);
     };
 
-    info!("📦 Building generic DEX swap transaction for {}", opportunity.dex_name);
+    info!(
+        "📦 Building generic DEX swap transaction for {}",
+        opportunity.dex_name
+    );
 
     // Build a simple arbitrage transaction using available account info
     // This is a back-run strategy: sell into the victim's price pump
 
     // We need to query the pool to get the actual token mints
     // For now, skip execution if we don't have complete pool info
-    warn!("⚠️  {} requires pool state query for token mints", opportunity.dex_name);
+    warn!(
+        "⚠️  {} requires pool state query for token mints",
+        opportunity.dex_name
+    );
     warn!("   Skipping execution until full DEX integration complete");
     warn!("   This is a LIVE TRADING protection - won't execute without complete info");
 
@@ -2897,15 +3231,25 @@ async fn process_real_opportunities(
 
     if let Ok(mut detector_guard) = detector.write() {
         // Process the raw ShredStream data for new token launches
-        info!("🔍 DEBUG: About to call process_shred_data with {} bytes", shred_data.len());
+        info!(
+            "🔍 DEBUG: About to call process_shred_data with {} bytes",
+            shred_data.len()
+        );
         match detector_guard.process_shred_data(shred_data).await {
             Ok(detected_tokens) => {
-                info!("🔍 DEBUG: process_shred_data returned {} tokens", detected_tokens.len());
+                info!(
+                    "🔍 DEBUG: process_shred_data returned {} tokens",
+                    detected_tokens.len()
+                );
                 for token_data in detected_tokens {
                     // Apply quality filtering
                     if token_data.quality_score >= ultra_config.min_token_quality_score {
                         // Apply market cap and liquidity filters
-                        if filter.evaluate_token_opportunity(&token_data).await.unwrap_or(false) {
+                        if filter
+                            .evaluate_token_opportunity(&token_data)
+                            .await
+                            .unwrap_or(false)
+                        {
                             opportunities.push(token_data);
 
                             // Update metrics
@@ -2939,7 +3283,8 @@ fn check_wallet_safety(
     safety_limits: &SafetyLimits,
 ) -> Result<()> {
     // 1. Check wallet balance with reserve
-    let balance_lamports = rpc_client.get_balance(wallet_pubkey)
+    let balance_lamports = rpc_client
+        .get_balance(wallet_pubkey)
         .map_err(|e| anyhow::anyhow!("Failed to get wallet balance: {}", e))?;
     let balance_sol = balance_lamports as f64 / 1_000_000_000.0;
 
@@ -2947,12 +3292,14 @@ fn check_wallet_safety(
     if balance_sol < required_balance {
         return Err(anyhow::anyhow!(
             "Insufficient balance: {:.6} SOL < {:.6} SOL required (position + reserve)",
-            balance_sol, required_balance
+            balance_sol,
+            required_balance
         ));
     }
 
     // 2. Check position size limit (GROK ITERATION 7: Apply volatility buffer)
-    let effective_max_position = safety_limits.max_position_size_sol * safety_limits.volatility_buffer;
+    let effective_max_position =
+        safety_limits.max_position_size_sol * safety_limits.volatility_buffer;
     const EPSILON: f64 = 0.001; // 0.001 SOL tolerance for floating point rounding
     if position_size_sol > effective_max_position + EPSILON {
         return Err(anyhow::anyhow!(
@@ -2969,15 +3316,19 @@ fn check_wallet_safety(
     if current_daily_loss_sol >= safety_limits.max_daily_loss_sol {
         return Err(anyhow::anyhow!(
             "Daily loss limit reached: {:.6} SOL >= {:.6} SOL max",
-            current_daily_loss_sol, safety_limits.max_daily_loss_sol
+            current_daily_loss_sol,
+            safety_limits.max_daily_loss_sol
         ));
     }
 
     // 4. Check wallet account state
-    let account_info = rpc_client.get_account(wallet_pubkey)
+    let account_info = rpc_client
+        .get_account(wallet_pubkey)
         .map_err(|e| anyhow::anyhow!("Failed to get wallet account: {}", e))?;
     if account_info.executable {
-        return Err(anyhow::anyhow!("Wallet account is executable (invalid state)"));
+        return Err(anyhow::anyhow!(
+            "Wallet account is executable (invalid state)"
+        ));
     }
 
     info!("✅ Safety checks passed | Balance: {:.6} SOL | Position: {:.6} SOL | Daily loss: {:.6} SOL",
@@ -3002,8 +3353,11 @@ async fn execute_new_coin_opportunity(
     // ⏰ DELAYED SANDWICH: Check if token has aged past 60-second anti-rug delay
     let token_age = token.detection_time.elapsed();
     if token_age < Duration::from_secs(60) {
-        info!("⏰ TOKEN TOO YOUNG | Token: {} | Age: {:.1}s / 60s | Waiting for anti-rug delay...",
-              token.mint, token_age.as_secs_f64());
+        info!(
+            "⏰ TOKEN TOO YOUNG | Token: {} | Age: {:.1}s / 60s | Waiting for anti-rug delay...",
+            token.mint,
+            token_age.as_secs_f64()
+        );
         return Ok(false);
     }
 
@@ -3022,29 +3376,53 @@ async fn execute_new_coin_opportunity(
     if !should_trade {
         info!("🔍 OPPORTUNITY REJECTED | Token: {} | Reasons:", token.mint);
         if !quality_check {
-            info!("  ❌ Quality: {:.1} < {:.1} threshold", token.quality_score, ultra_config.new_coin_quality_threshold);
+            info!(
+                "  ❌ Quality: {:.1} < {:.1} threshold",
+                token.quality_score, ultra_config.new_coin_quality_threshold
+            );
         }
         if !min_liquidity_check {
-            info!("  ❌ Min Liquidity: {:.3} SOL < 0.1 SOL", token.initial_sol_raised);
+            info!(
+                "  ❌ Min Liquidity: {:.3} SOL < 0.1 SOL",
+                token.initial_sol_raised
+            );
         }
         if !max_liquidity_check {
-            info!("  ❌ Max Liquidity: {:.3} SOL > 10.0 SOL", token.initial_sol_raised);
+            info!(
+                "  ❌ Max Liquidity: {:.3} SOL > 10.0 SOL",
+                token.initial_sol_raised
+            );
         }
         if !risk_check {
-            info!("  ❌ Risk Flags: {} > 2 allowed | Flags: {:?}", token.risk_flags.len(), token.risk_flags);
+            info!(
+                "  ❌ Risk Flags: {} > 2 allowed | Flags: {:?}",
+                token.risk_flags.len(),
+                token.risk_flags
+            );
         }
-        info!("  📊 Token Details: Initial SOL: {:.3} | Quality: {:.1}/10 | Age: {:?}",
-              token.initial_sol_raised, token.quality_score, token.detection_time.elapsed());
+        info!(
+            "  📊 Token Details: Initial SOL: {:.3} | Quality: {:.1}/10 | Age: {:?}",
+            token.initial_sol_raised,
+            token.quality_score,
+            token.detection_time.elapsed()
+        );
         return Ok(false);
     }
 
     // OPPORTUNITY ACCEPTED LOGGING
-    info!("✅ OPPORTUNITY ACCEPTED | Token: {} | Quality: {:.1}/10 | SOL: {:.3} | Risks: {}",
-          token.mint, token.quality_score, token.initial_sol_raised, token.risk_flags.len());
+    info!(
+        "✅ OPPORTUNITY ACCEPTED | Token: {} | Quality: {:.1}/10 | SOL: {:.3} | Risks: {}",
+        token.mint,
+        token.quality_score,
+        token.initial_sol_raised,
+        token.risk_flags.len()
+    );
 
     // REAL TRADE EXECUTION IMPLEMENTATION WITH SAFETY CHECKS
-    info!("🚀 Executing REAL PumpFun trade for token: {} (Quality: {:.1})",
-          token.mint, token.quality_score);
+    info!(
+        "🚀 Executing REAL PumpFun trade for token: {} (Quality: {:.1})",
+        token.mint, token.quality_score
+    );
 
     // GROK FIX #2: Atomic balance locking to prevent concurrent trade race conditions
     // Global tracker for reserved capital (prevents over-spending with MAX_CONCURRENT_TRADES=2)
@@ -3070,28 +3448,33 @@ async fn execute_new_coin_opportunity(
     // STEP 1: Get current wallet balance (dynamic position sizing based on actual funds)
     let rpc_url_for_balance = std::env::var("SOLANA_RPC_ENDPOINT")
         .unwrap_or_else(|_| "https://api.mainnet-beta.solana.com".to_string());
-    let current_balance_lamports = match solana_rpc_client::rpc_client::RpcClient::new(rpc_url_for_balance)
-        .get_balance(&trading_keypair.pubkey()) {
-        Ok(balance_lamports) => balance_lamports,  // Keep as u64, don't convert to f64
-        Err(e) => {
-            error!("❌ Failed to check wallet balance: {}", e);
-            return Ok(false);
-        }
-    };
+    let current_balance_lamports =
+        match solana_rpc_client::rpc_client::RpcClient::new(rpc_url_for_balance)
+            .get_balance(&trading_keypair.pubkey())
+        {
+            Ok(balance_lamports) => balance_lamports, // Keep as u64, don't convert to f64
+            Err(e) => {
+                error!("❌ Failed to check wallet balance: {}", e);
+                return Ok(false);
+            }
+        };
 
     // GROK CYCLE 2 FIX #2: Use existing lock (already held)
     let reserved_lamports = *balance_lock;
     let available_balance_lamports = current_balance_lamports.saturating_sub(reserved_lamports);
 
     // STEP 2: Calculate tradeable balance (protect 0.1 SOL = 100_000_000 lamports for fees)
-    let fee_reserve_lamports: u64 = 100_000_000;  // 0.1 SOL in lamports
-    let tradeable_balance_lamports = available_balance_lamports.saturating_sub(fee_reserve_lamports);
+    let fee_reserve_lamports: u64 = 100_000_000; // 0.1 SOL in lamports
+    let tradeable_balance_lamports =
+        available_balance_lamports.saturating_sub(fee_reserve_lamports);
 
     if tradeable_balance_lamports == 0 {
         let current_balance_sol = current_balance_lamports as f64 / 1_000_000_000.0;
         let reserved_sol = reserved_lamports as f64 / 1_000_000_000.0;
-        error!("❌ INSUFFICIENT BALANCE: {:.3} SOL total, {:.3} SOL reserved, need > 0.1 SOL for fees",
-               current_balance_sol, reserved_sol);
+        error!(
+            "❌ INSUFFICIENT BALANCE: {:.3} SOL total, {:.3} SOL reserved, need > 0.1 SOL for fees",
+            current_balance_sol, reserved_sol
+        );
         return Ok(false);
     }
 
@@ -3108,7 +3491,7 @@ async fn execute_new_coin_opportunity(
 
     // GROK FIX: Calculate position size in lamports (no precision loss)
     let position_size_lamports = (tradeable_balance_lamports * quality_allocation_percent) / 100;
-    let position_size_sol = position_size_lamports as f64 / 1_000_000_000.0;  // Convert only for display
+    let position_size_sol = position_size_lamports as f64 / 1_000_000_000.0; // Convert only for display
 
     // STEP 4: Calculate expected profit based on quality score
     // REALISTIC RETURNS (2025-10-07 fix): Based on actual PumpFun MEV performance
@@ -3123,7 +3506,8 @@ async fn execute_new_coin_opportunity(
     };
 
     // GROK FIX: Calculate profit in lamports for precision (updated 2025-10-07 for f64 percentage)
-    let expected_profit_lamports = ((position_size_lamports as f64 * expected_return_percent) / 100.0) as u64;
+    let expected_profit_lamports =
+        ((position_size_lamports as f64 * expected_return_percent) / 100.0) as u64;
     let expected_profit_sol = expected_profit_lamports as f64 / 1_000_000_000.0;
 
     // Convert to SOL for display and compatibility with existing code
@@ -3135,8 +3519,10 @@ async fn execute_new_coin_opportunity(
 
     info!("💰 Dynamic Position Sizing | Balance: {:.3} SOL | Tradeable: {:.3} SOL | Quality: {:.1} | Allocation: {}% | Position: {:.3} SOL",
           current_balance_sol, tradeable_balance_sol, token.quality_score, quality_allocation_percent, position_size_sol);
-    debug!("💰 Expected profit: {:.4} SOL ({}% return)",
-           expected_profit_sol, expected_return_percent);
+    debug!(
+        "💰 Expected profit: {:.4} SOL ({}% return)",
+        expected_profit_sol, expected_return_percent
+    );
 
     // DYNAMIC PROFIT THRESHOLD: Ensure profit covers ALL fees + margin
     // Calculate what JITO fee percentage we'll use for this trade
@@ -3208,8 +3594,8 @@ async fn execute_new_coin_opportunity(
         .and_then(|v| v.parse::<f64>().ok())
         .unwrap_or(1.2);
 
-    let buffered_fees_lamports = ((total_fees_lamports as f64 * fee_buffer_multiplier) as u64)
-        .min(u64::MAX);
+    let buffered_fees_lamports =
+        ((total_fees_lamports as f64 * fee_buffer_multiplier) as u64).min(u64::MAX);
 
     let net_profit_lamports = expected_profit_lamports.saturating_sub(buffered_fees_lamports);
 
@@ -3233,11 +3619,17 @@ async fn execute_new_coin_opportunity(
 
     // GROK CYCLE 3: Validate multiplier is in safe range
     if !(1.0..=5.0).contains(&min_profit_margin_multiplier) {
-        error!("❌ INVALID CONFIG: MIN_PROFIT_MARGIN_MULTIPLIER={} (must be 1.0-5.0)", min_profit_margin_multiplier);
+        error!(
+            "❌ INVALID CONFIG: MIN_PROFIT_MARGIN_MULTIPLIER={} (must be 1.0-5.0)",
+            min_profit_margin_multiplier
+        );
         return Ok(false);
     }
     if min_profit_margin_multiplier < 1.5 {
-        warn!("⚠️  LOW MARGIN MULTIPLIER: {} (recommended minimum: 1.5)", min_profit_margin_multiplier);
+        warn!(
+            "⚠️  LOW MARGIN MULTIPLIER: {} (recommended minimum: 1.5)",
+            min_profit_margin_multiplier
+        );
     }
 
     // GROK CYCLE 3: Use buffered fees for required margin calculation
@@ -3251,8 +3643,10 @@ async fn execute_new_coin_opportunity(
 
     // GROK CYCLE 3: Guard against zero fees (should never happen)
     if buffered_fees_lamports == 0 {
-        error!("❌ INVALID: Total fees = 0 (position: {}, expected profit: {})",
-               position_size_sol, expected_profit_sol);
+        error!(
+            "❌ INVALID: Total fees = 0 (position: {}, expected profit: {})",
+            position_size_sol, expected_profit_sol
+        );
         return Ok(false);
     }
 
@@ -3265,7 +3659,9 @@ async fn execute_new_coin_opportunity(
             0.0
         };
         let margin_shortfall_pct = if required_margin_lamports > 0 {
-            ((required_margin_lamports - net_profit_lamports) as f64 / required_margin_lamports as f64) * 100.0
+            ((required_margin_lamports - net_profit_lamports) as f64
+                / required_margin_lamports as f64)
+                * 100.0
         } else {
             0.0
         };
@@ -3294,12 +3690,17 @@ async fn execute_new_coin_opportunity(
     // SAFETY CHECK: Verify minimum position size (ensures sufficient liquidity)
     // Position size check implicitly validates liquidity - if we can't trade 0.05 SOL, pool is too small
     if position_size < 0.05 {
-        warn!("⚠️  Position size too small: {:.3} SOL < 0.05 SOL minimum (insufficient liquidity)", position_size);
+        warn!(
+            "⚠️  Position size too small: {:.3} SOL < 0.05 SOL minimum (insufficient liquidity)",
+            position_size
+        );
         return Ok(false);
     }
 
-    info!("✅ SAFETY CHECKS PASSED | Balance: {:.3} SOL | Position: {:.3} SOL (liquidity sufficient)",
-          current_balance, position_size);
+    info!(
+        "✅ SAFETY CHECKS PASSED | Balance: {:.3} SOL | Position: {:.3} SOL (liquidity sufficient)",
+        current_balance, position_size
+    );
 
     // GROK ITERATION 6 FIX #1: Comprehensive wallet safety check
     static RPC_CLIENT_SAFETY: Lazy<Arc<RpcClient>> = Lazy::new(|| {
@@ -3308,9 +3709,17 @@ async fn execute_new_coin_opportunity(
         Arc::new(RpcClient::new(rpc_endpoint))
     });
 
-    match check_wallet_safety(&RPC_CLIENT_SAFETY, &trading_keypair.pubkey(), position_size, safety_limits) {
+    match check_wallet_safety(
+        &RPC_CLIENT_SAFETY,
+        &trading_keypair.pubkey(),
+        position_size,
+        safety_limits,
+    ) {
         Ok(_) => {
-            info!("🛡️  Wallet safety check PASSED for {:.3} SOL trade", position_size);
+            info!(
+                "🛡️  Wallet safety check PASSED for {:.3} SOL trade",
+                position_size
+            );
         }
         Err(e) => {
             error!("🚫 Wallet safety check FAILED: {}", e);
@@ -3321,14 +3730,18 @@ async fn execute_new_coin_opportunity(
     // GROK CYCLE 2 FIX #3: Reserve balance NOW using RAII guard for automatic cleanup
     // The guard will automatically release the reservation if trade fails
     *balance_lock += position_size_lamports;
-    info!("💰 RESERVED {} lamports ({:.3} SOL) | Total reserved: {} lamports ({:.3} SOL)",
-          position_size_lamports, position_size_sol,
-          *balance_lock, *balance_lock as f64 / 1_000_000_000.0);
+    info!(
+        "💰 RESERVED {} lamports ({:.3} SOL) | Total reserved: {} lamports ({:.3} SOL)",
+        position_size_lamports,
+        position_size_sol,
+        *balance_lock,
+        *balance_lock as f64 / 1_000_000_000.0
+    );
 
     // Create RAII guard - will auto-release on failure, unless explicitly kept
     let mut reservation_guard = BalanceReservationGuard::new(
         Arc::clone(&RESERVED_BALANCE_LAMPORTS),
-        position_size_lamports
+        position_size_lamports,
     );
 
     // Build real PumpFun bonding curve transaction
@@ -3345,7 +3758,8 @@ async fn execute_new_coin_opportunity(
         &trading_keypair.pubkey(),
         &trading_keypair.pubkey(),
         (position_size * 1_000_000_000.0) as u64, // Convert SOL to lamports
-        ((position_size * 1_000_000_000.0) as u64 as f64 * (1.0 + trade_params.max_slippage / 100.0)) as u64,
+        ((position_size * 1_000_000_000.0) as u64 as f64
+            * (1.0 + trade_params.max_slippage / 100.0)) as u64,
     ) {
         Ok(buy_instruction) => {
             // GROK FIX #4: Use cached RPC client instead of creating new one
@@ -3363,7 +3777,10 @@ async fn execute_new_coin_opportunity(
             let mut recent_blockhash = match rpc_client.get_latest_blockhash() {
                 Ok(blockhash) => blockhash,
                 Err(e) => {
-                    error!("❌ CRITICAL: Failed to get latest blockhash: {} | Token: {}", e, token.mint);
+                    error!(
+                        "❌ CRITICAL: Failed to get latest blockhash: {} | Token: {}",
+                        e, token.mint
+                    );
                     return Err(anyhow::anyhow!("Failed to get blockhash: {}", e));
                 }
             };
@@ -3371,16 +3788,25 @@ async fn execute_new_coin_opportunity(
             // GROK ITERATION 8: Auto-refetch if blockhash is >30s old (was 60s in Iteration 7)
             let mut blockhash_age_secs = blockhash_fetch_time.elapsed().as_secs();
             if blockhash_age_secs > 30 {
-                warn!("⚠️ Blockhash stale: {} seconds old - refetching fresh blockhash", blockhash_age_secs);
+                warn!(
+                    "⚠️ Blockhash stale: {} seconds old - refetching fresh blockhash",
+                    blockhash_age_secs
+                );
                 match rpc_client.get_latest_blockhash() {
                     Ok(new_blockhash) => {
                         recent_blockhash = new_blockhash;
                         blockhash_fetch_time = std::time::Instant::now();
                         blockhash_age_secs = 0; // Reset age after successful refetch
-                        info!("✅ Refreshed blockhash (was {} seconds old)", blockhash_age_secs);
+                        info!(
+                            "✅ Refreshed blockhash (was {} seconds old)",
+                            blockhash_age_secs
+                        );
                     }
                     Err(e) => {
-                        error!("❌ Failed to refetch blockhash: {} - using stale blockhash", e);
+                        error!(
+                            "❌ Failed to refetch blockhash: {} - using stale blockhash",
+                            e
+                        );
                     }
                 }
             }
@@ -3390,7 +3816,10 @@ async fn execute_new_coin_opportunity(
             if blockhash_age_secs > 120 {
                 error!("❌ CRITICAL: Blockhash too stale ({} seconds) - Solana TTL ~150 blocks - Aborting trade | Token: {}",
                        blockhash_age_secs, token.mint);
-                return Err(anyhow::anyhow!("Blockhash too stale: {} seconds (max 120s)", blockhash_age_secs));
+                return Err(anyhow::anyhow!(
+                    "Blockhash too stale: {} seconds (max 120s)",
+                    blockhash_age_secs
+                ));
             }
 
             // GROK FIX #5: Make threshold configurable
@@ -3422,7 +3851,8 @@ async fn execute_new_coin_opportunity(
                 // (jito_fee_percentage already calculated above in profit check)
 
                 // Calculate total fee budget (in lamports) with proper rounding (Grok's recommendation)
-                let total_fee_budget_lamports = ((expected_profit_sol * jito_fee_percentage * 1_000_000_000.0) + 0.5) as u64;
+                let total_fee_budget_lamports =
+                    ((expected_profit_sol * jito_fee_percentage * 1_000_000_000.0) + 0.5) as u64;
 
                 // Split 60/40: gas vs tip (with rounding to prevent precision loss)
                 let gas_budget_lamports = ((total_fee_budget_lamports as f64 * 0.60) + 0.5) as u64;
@@ -3441,8 +3871,10 @@ async fn execute_new_coin_opportunity(
                     .unwrap_or(400_000u32); // Default: 400k units for PumpFun swaps
 
                 // Create compute budget instructions (order matters: limit first, then price)
-                let compute_limit_ix = ComputeBudgetInstruction::set_compute_unit_limit(jito_compute_limit);
-                let priority_fee_ix = ComputeBudgetInstruction::set_compute_unit_price(jito_priority_fee);
+                let compute_limit_ix =
+                    ComputeBudgetInstruction::set_compute_unit_limit(jito_compute_limit);
+                let priority_fee_ix =
+                    ComputeBudgetInstruction::set_compute_unit_price(jito_priority_fee);
 
                 // Build transaction with compute budget + buy instruction
                 let instructions = vec![compute_limit_ix, priority_fee_ix, buy_instruction.clone()];
@@ -3459,14 +3891,23 @@ async fn execute_new_coin_opportunity(
 
                 // GROK CYCLE 2 FIX #1: Add timeout for JITO bundle submission (60s)
                 let jito_timeout_secs = std::env::var("JITO_BUNDLE_TIMEOUT_SECS")
-                    .ok().and_then(|v| v.parse().ok()).unwrap_or(60u64);
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(60u64);
 
                 match tokio::time::timeout(
                     tokio::time::Duration::from_secs(jito_timeout_secs),
                     async {
-                        crate::jito_submitter::get_submitter().submit(bundle, token.mint.to_string(), position_size, expected_profit_sol)
-                    }
-                ).await {
+                        crate::jito_submitter::get_submitter().submit(
+                            bundle,
+                            token.mint.to_string(),
+                            position_size,
+                            expected_profit_sol,
+                        )
+                    },
+                )
+                .await
+                {
                     Ok(Ok(_)) => {
                         let execution_time = execution_start.elapsed().as_millis() as f64;
                         info!("✅ Trade queued for JITO in {:.2}ms | Awaiting MEV-protected submission", execution_time);
@@ -3477,15 +3918,24 @@ async fn execute_new_coin_opportunity(
                     }
                     Ok(Err(e)) => {
                         // JITO submission failed - guard will auto-release reservation
-                        error!("❌ CRITICAL: Failed to queue JITO trade: {} | Token: {}", e, token.mint);
+                        error!(
+                            "❌ CRITICAL: Failed to queue JITO trade: {} | Token: {}",
+                            e, token.mint
+                        );
                         circuit_breaker.record_failure_typed(FailureType::BundleRejection);
                         Err(anyhow::anyhow!("JITO submission failed: {}", e))
                     }
                     Err(_timeout) => {
                         // GROK CYCLE 2 FIX #1: Timeout waiting for JITO - guard will auto-release
-                        error!("⏱️  TIMEOUT: JITO bundle submission exceeded {}s | Token: {}", jito_timeout_secs, token.mint);
+                        error!(
+                            "⏱️  TIMEOUT: JITO bundle submission exceeded {}s | Token: {}",
+                            jito_timeout_secs, token.mint
+                        );
                         circuit_breaker.record_failure_typed(FailureType::NetworkError);
-                        Err(anyhow::anyhow!("JITO submission timeout after {}s", jito_timeout_secs))
+                        Err(anyhow::anyhow!(
+                            "JITO submission timeout after {}s",
+                            jito_timeout_secs
+                        ))
                     }
                 }
             } else {
@@ -3506,8 +3956,10 @@ async fn execute_new_coin_opportunity(
                     .unwrap_or(300_000u32); // Default: 300k units (covers most DeFi interactions)
 
                 // Create compute budget instructions (order matters: limit, then price)
-                let compute_limit_ix = ComputeBudgetInstruction::set_compute_unit_limit(compute_limit);
-                let priority_fee_ix = ComputeBudgetInstruction::set_compute_unit_price(priority_fee_lamports);
+                let compute_limit_ix =
+                    ComputeBudgetInstruction::set_compute_unit_limit(compute_limit);
+                let priority_fee_ix =
+                    ComputeBudgetInstruction::set_compute_unit_price(priority_fee_lamports);
 
                 // Build transaction with ALL instructions: compute budget first, then buy
                 let instructions = vec![compute_limit_ix, priority_fee_ix, buy_instruction.clone()];
@@ -3523,8 +3975,11 @@ async fn execute_new_coin_opportunity(
 
                 // GROK ITERATION 6/7 FIX: Add timeout to transaction confirmation
                 // ITERATION 7: Lowered default from 30s to 15s for MEV speed
-                let confirmation_timeout_secs = std::env::var("TRANSACTION_CONFIRMATION_TIMEOUT_SECS")
-                    .ok().and_then(|v| v.parse().ok()).unwrap_or(15u64);
+                let confirmation_timeout_secs =
+                    std::env::var("TRANSACTION_CONFIRMATION_TIMEOUT_SECS")
+                        .ok()
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(15u64);
 
                 let send_future = {
                     let rpc_clone = Arc::clone(&rpc_client);
@@ -3532,14 +3987,17 @@ async fn execute_new_coin_opportunity(
                     async move {
                         tokio::task::spawn_blocking(move || {
                             rpc_clone.send_and_confirm_transaction(&tx_clone)
-                        }).await
+                        })
+                        .await
                     }
                 };
 
                 match tokio::time::timeout(
                     tokio::time::Duration::from_secs(confirmation_timeout_secs),
-                    send_future
-                ).await {
+                    send_future,
+                )
+                .await
+                {
                     Ok(Ok(Ok(signature))) => {
                         let execution_time = execution_start.elapsed().as_millis() as f64;
                         info!("✅ Priority fee trade executed in {:.2}ms | Signature: {} | Token: {} | Amount: {:.3} SOL | Fee: {} lamports",
@@ -3551,13 +4009,22 @@ async fn execute_new_coin_opportunity(
                     }
                     Ok(Ok(Err(send_err))) => {
                         // Transaction send failed - guard will auto-release
-                        error!("❌ Priority fee transaction FAILED: {} | Token: {}", send_err, token.mint);
+                        error!(
+                            "❌ Priority fee transaction FAILED: {} | Token: {}",
+                            send_err, token.mint
+                        );
                         circuit_breaker.record_failure_typed(FailureType::TransactionFailed);
-                        Err(anyhow::anyhow!("Priority fee transaction failed: {}", send_err))
+                        Err(anyhow::anyhow!(
+                            "Priority fee transaction failed: {}",
+                            send_err
+                        ))
                     }
                     Ok(Err(spawn_err)) => {
                         // Tokio spawn failed - guard will auto-release
-                        error!("❌ Failed to spawn transaction task: {} | Token: {}", spawn_err, token.mint);
+                        error!(
+                            "❌ Failed to spawn transaction task: {} | Token: {}",
+                            spawn_err, token.mint
+                        );
                         circuit_breaker.record_failure_typed(FailureType::NetworkError);
                         Err(anyhow::anyhow!("Task spawn failed: {}", spawn_err))
                     }
@@ -3575,12 +4042,17 @@ async fn execute_new_coin_opportunity(
                             error!("❌ CRITICAL: Max retry attempts ({}) reached after timeout - Trade abandoned | Token: {}",
                                    MAX_SUBMISSION_ATTEMPTS, token.mint);
                             // Guard will auto-release reservation
-                            return Err(anyhow::anyhow!("Max retry attempts reached after timeout"));
+                            return Err(anyhow::anyhow!(
+                                "Max retry attempts reached after timeout"
+                            ));
                         }
 
                         // GROK ITERATION 8 FIX: Exponential backoff before retry (1s, 2s, 4s)
                         let backoff_secs = 2u64.pow((attempt_count - 1) as u32);
-                        info!("⏳ Applying exponential backoff: {}s before retry", backoff_secs);
+                        info!(
+                            "⏳ Applying exponential backoff: {}s before retry",
+                            backoff_secs
+                        );
                         tokio::time::sleep(tokio::time::Duration::from_secs(backoff_secs)).await;
 
                         // Refetch blockhash and fallback to JITO
@@ -3588,21 +4060,33 @@ async fn execute_new_coin_opportunity(
                             Ok(blockhash) => blockhash,
                             Err(e2) => {
                                 error!("❌ CRITICAL: Failed to refetch blockhash after timeout: {} | Token: {}", e2, token.mint);
-                                return Err(anyhow::anyhow!("Blockhash refetch failed after timeout: {}", e2));
+                                return Err(anyhow::anyhow!(
+                                    "Blockhash refetch failed after timeout: {}",
+                                    e2
+                                ));
                             }
                         };
 
-                        let jito_transaction = solana_sdk::transaction::Transaction::new_signed_with_payer(
-                            &[buy_instruction],
-                            Some(&trading_keypair.pubkey()),
-                            &[trading_keypair],
-                            fresh_blockhash,
-                        );
+                        let jito_transaction =
+                            solana_sdk::transaction::Transaction::new_signed_with_payer(
+                                &[buy_instruction],
+                                Some(&trading_keypair.pubkey()),
+                                &[trading_keypair],
+                                fresh_blockhash,
+                            );
                         let bundle = vec![jito_transaction];
 
-                        match crate::jito_submitter::get_submitter().submit(bundle, token.mint.to_string(), position_size, expected_profit_sol) {
+                        match crate::jito_submitter::get_submitter().submit(
+                            bundle,
+                            token.mint.to_string(),
+                            position_size,
+                            expected_profit_sol,
+                        ) {
                             Ok(_) => {
-                                info!("✅ Fallback: Queued for JITO after timeout (attempt {})", attempt_count);
+                                info!(
+                                    "✅ Fallback: Queued for JITO after timeout (attempt {})",
+                                    attempt_count
+                                );
                                 // GROK CYCLE 2 FIX #3: Keep reservation (JITO will handle cleanup)
                                 reservation_guard.keep_reservation();
                                 circuit_breaker.record_success();
@@ -3613,7 +4097,11 @@ async fn execute_new_coin_opportunity(
                                        attempt_count, MAX_SUBMISSION_ATTEMPTS, e2);
                                 circuit_breaker.record_failure_typed(FailureType::BundleRejection);
                                 // Guard will auto-release reservation
-                                Err(anyhow::anyhow!("JITO failed after timeout (attempt {}): {}", attempt_count, e2))
+                                Err(anyhow::anyhow!(
+                                    "JITO failed after timeout (attempt {}): {}",
+                                    attempt_count,
+                                    e2
+                                ))
                             }
                         }
                     }

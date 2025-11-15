@@ -1,10 +1,10 @@
 use anyhow::Result;
-use std::time::{Duration, Instant};
-use std::sync::Arc;
 use std::collections::HashMap;
-use tracing::{info, warn, error, debug};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tokio::sync::Mutex;
 use tokio::time::sleep;
-use tokio::sync::Mutex;  // HIGH PRIORITY FIX: Use tokio::sync::Mutex for async contexts
+use tracing::{debug, error, info, warn}; // HIGH PRIORITY FIX: Use tokio::sync::Mutex for async contexts
 
 /// Enhanced error recovery manager with exponential backoff and specific failure handling
 ///
@@ -13,7 +13,7 @@ use tokio::sync::Mutex;  // HIGH PRIORITY FIX: Use tokio::sync::Mutex for async 
 #[derive(Debug, Clone)]
 pub struct ErrorRecoveryManager {
     retry_policies: Arc<Mutex<HashMap<String, RetryPolicy>>>,
-    failure_statistics: Arc<Mutex<FailureStatistics>>  ,
+    failure_statistics: Arc<Mutex<FailureStatistics>>,
     circuit_breaker_states: Arc<Mutex<HashMap<String, CircuitBreakerState>>>,
 }
 
@@ -112,66 +112,90 @@ impl ErrorRecoveryManager {
         let mut retry_policies = HashMap::new();
 
         // Configure specific retry policies for different error types
-        retry_policies.insert("transaction_timeout".to_string(), RetryPolicy {
-            max_retries: 5,
-            base_delay_ms: 200,
-            max_delay_ms: 10000,
-            backoff_multiplier: 1.5,
-            jitter_factor: 0.2,
-        });
+        retry_policies.insert(
+            "transaction_timeout".to_string(),
+            RetryPolicy {
+                max_retries: 5,
+                base_delay_ms: 200,
+                max_delay_ms: 10000,
+                backoff_multiplier: 1.5,
+                jitter_factor: 0.2,
+            },
+        );
 
-        retry_policies.insert("invalid_blockhash".to_string(), RetryPolicy {
-            max_retries: 3,
-            base_delay_ms: 50,
-            max_delay_ms: 2000,
-            backoff_multiplier: 2.0,
-            jitter_factor: 0.1,
-        });
+        retry_policies.insert(
+            "invalid_blockhash".to_string(),
+            RetryPolicy {
+                max_retries: 3,
+                base_delay_ms: 50,
+                max_delay_ms: 2000,
+                backoff_multiplier: 2.0,
+                jitter_factor: 0.1,
+            },
+        );
 
-        retry_policies.insert("rpc_failure".to_string(), RetryPolicy {
-            max_retries: 4,
-            base_delay_ms: 500,
-            max_delay_ms: 15000,
-            backoff_multiplier: 2.5,
-            jitter_factor: 0.3,
-        });
+        retry_policies.insert(
+            "rpc_failure".to_string(),
+            RetryPolicy {
+                max_retries: 4,
+                base_delay_ms: 500,
+                max_delay_ms: 15000,
+                backoff_multiplier: 2.5,
+                jitter_factor: 0.3,
+            },
+        );
 
-        retry_policies.insert("bundle_failure".to_string(), RetryPolicy {
-            max_retries: 3,
-            base_delay_ms: 300,
-            max_delay_ms: 8000,
-            backoff_multiplier: 2.0,
-            jitter_factor: 0.15,
-        });
+        retry_policies.insert(
+            "bundle_failure".to_string(),
+            RetryPolicy {
+                max_retries: 3,
+                base_delay_ms: 300,
+                max_delay_ms: 8000,
+                backoff_multiplier: 2.0,
+                jitter_factor: 0.15,
+            },
+        );
 
-        retry_policies.insert("shredstream_failure".to_string(), RetryPolicy {
-            max_retries: 10,
-            base_delay_ms: 100,
-            max_delay_ms: 5000,
-            backoff_multiplier: 1.3,
-            jitter_factor: 0.1,
-        });
+        retry_policies.insert(
+            "shredstream_failure".to_string(),
+            RetryPolicy {
+                max_retries: 10,
+                base_delay_ms: 100,
+                max_delay_ms: 5000,
+                backoff_multiplier: 1.3,
+                jitter_factor: 0.1,
+            },
+        );
 
         let mut circuit_breakers = HashMap::new();
 
         // Configure circuit breakers for critical services
-        circuit_breakers.insert("rpc_endpoint".to_string(), CircuitBreakerState {
-            failure_threshold: 3,
-            reset_timeout: Duration::from_secs(30),
-            ..Default::default()
-        });
+        circuit_breakers.insert(
+            "rpc_endpoint".to_string(),
+            CircuitBreakerState {
+                failure_threshold: 3,
+                reset_timeout: Duration::from_secs(30),
+                ..Default::default()
+            },
+        );
 
-        circuit_breakers.insert("jito_bundles".to_string(), CircuitBreakerState {
-            failure_threshold: 5,
-            reset_timeout: Duration::from_secs(60),
-            ..Default::default()
-        });
+        circuit_breakers.insert(
+            "jito_bundles".to_string(),
+            CircuitBreakerState {
+                failure_threshold: 5,
+                reset_timeout: Duration::from_secs(60),
+                ..Default::default()
+            },
+        );
 
-        circuit_breakers.insert("shredstream".to_string(), CircuitBreakerState {
-            failure_threshold: 8,
-            reset_timeout: Duration::from_secs(120),
-            ..Default::default()
-        });
+        circuit_breakers.insert(
+            "shredstream".to_string(),
+            CircuitBreakerState {
+                failure_threshold: 8,
+                reset_timeout: Duration::from_secs(120),
+                ..Default::default()
+            },
+        );
 
         Self {
             retry_policies: Arc::new(Mutex::new(retry_policies)),
@@ -181,10 +205,11 @@ impl ErrorRecoveryManager {
     }
 
     /// Execute with retry logic and exponential backoff
-    pub async fn execute_with_retry<F, T, E>(&self,
+    pub async fn execute_with_retry<F, T, E>(
+        &self,
         operation_name: &str,
         error_type: ErrorType,
-        operation: F
+        operation: F,
     ) -> Result<T, E>
     where
         F: Fn() -> Result<T, E> + Send + Sync,
@@ -195,7 +220,10 @@ impl ErrorRecoveryManager {
 
         // Check circuit breaker
         if !self.is_circuit_closed(&error_key) {
-            error!("Circuit breaker is open for {}, skipping operation", operation_name);
+            error!(
+                "Circuit breaker is open for {}, skipping operation",
+                operation_name
+            );
             return operation(); // Try operation anyway, circuit breaker will be updated
         }
 
@@ -209,7 +237,11 @@ impl ErrorRecoveryManager {
             match operation() {
                 Ok(result) => {
                     if attempt > 0 {
-                        info!("✅ Operation '{}' succeeded after {} attempts", operation_name, attempt + 1);
+                        info!(
+                            "✅ Operation '{}' succeeded after {} attempts",
+                            operation_name,
+                            attempt + 1
+                        );
                         self.record_successful_recovery();
                         self.reset_circuit_breaker(&error_key);
                     }
@@ -220,15 +252,23 @@ impl ErrorRecoveryManager {
                     self.record_failure(&error_type);
 
                     if attempt > policy.max_retries {
-                        error!("❌ Operation '{}' failed after {} attempts: {:?}",
-                               operation_name, attempt, err);
+                        error!(
+                            "❌ Operation '{}' failed after {} attempts: {:?}",
+                            operation_name, attempt, err
+                        );
                         self.trigger_circuit_breaker(&error_key);
                         return Err(err);
                     }
 
                     let delay = self.calculate_delay(&policy, attempt);
-                    warn!("⚠️  Operation '{}' failed (attempt {}/{}), retrying in {}ms: {:?}",
-                          operation_name, attempt, policy.max_retries + 1, delay.as_millis(), err);
+                    warn!(
+                        "⚠️  Operation '{}' failed (attempt {}/{}), retrying in {}ms: {:?}",
+                        operation_name,
+                        attempt,
+                        policy.max_retries + 1,
+                        delay.as_millis(),
+                        err
+                    );
 
                     sleep(delay).await;
                 }
@@ -237,10 +277,11 @@ impl ErrorRecoveryManager {
     }
 
     /// Execute async operation with retry logic
-    pub async fn execute_async_with_retry<F, Fut, T, E>(&self,
+    pub async fn execute_async_with_retry<F, Fut, T, E>(
+        &self,
         operation_name: &str,
         error_type: ErrorType,
-        operation: F
+        operation: F,
     ) -> Result<T, E>
     where
         F: Fn() -> Fut + Send + Sync,
@@ -251,7 +292,10 @@ impl ErrorRecoveryManager {
 
         // Check circuit breaker
         if !self.is_circuit_closed(&error_key) {
-            error!("Circuit breaker is open for {}, skipping operation", operation_name);
+            error!(
+                "Circuit breaker is open for {}, skipping operation",
+                operation_name
+            );
             return operation().await; // Return the error
         }
 
@@ -265,7 +309,11 @@ impl ErrorRecoveryManager {
             match operation().await {
                 Ok(result) => {
                     if attempt > 0 {
-                        info!("✅ Async operation '{}' succeeded after {} attempts", operation_name, attempt + 1);
+                        info!(
+                            "✅ Async operation '{}' succeeded after {} attempts",
+                            operation_name,
+                            attempt + 1
+                        );
                         self.record_successful_recovery();
                         self.reset_circuit_breaker(&error_key);
                     }
@@ -276,15 +324,23 @@ impl ErrorRecoveryManager {
                     self.record_failure(&error_type);
 
                     if attempt > policy.max_retries {
-                        error!("❌ Async operation '{}' failed after {} attempts: {:?}",
-                               operation_name, attempt, err);
+                        error!(
+                            "❌ Async operation '{}' failed after {} attempts: {:?}",
+                            operation_name, attempt, err
+                        );
                         self.trigger_circuit_breaker(&error_key);
                         return Err(err);
                     }
 
                     let delay = self.calculate_delay(&policy, attempt);
-                    warn!("⚠️  Async operation '{}' failed (attempt {}/{}), retrying in {}ms: {:?}",
-                          operation_name, attempt, policy.max_retries + 1, delay.as_millis(), err);
+                    warn!(
+                        "⚠️  Async operation '{}' failed (attempt {}/{}), retrying in {}ms: {:?}",
+                        operation_name,
+                        attempt,
+                        policy.max_retries + 1,
+                        delay.as_millis(),
+                        err
+                    );
 
                     sleep(delay).await;
                 }
@@ -369,7 +425,10 @@ impl ErrorRecoveryManager {
                     if let Some(last_failure) = breaker.last_failure_time {
                         if last_failure.elapsed() > breaker.reset_timeout {
                             breaker.state = CircuitState::HalfOpen;
-                            info!("🔄 Circuit breaker for {} moved to half-open state", service_key);
+                            info!(
+                                "🔄 Circuit breaker for {} moved to half-open state",
+                                service_key
+                            );
                             true
                         } else {
                             false
@@ -401,7 +460,10 @@ impl ErrorRecoveryManager {
 
             if breaker.failure_count >= breaker.failure_threshold {
                 breaker.state = CircuitState::Open;
-                error!("🚨 Circuit breaker OPENED for {} after {} failures", service_key, breaker.failure_count);
+                error!(
+                    "🚨 Circuit breaker OPENED for {} after {} failures",
+                    service_key, breaker.failure_count
+                );
             }
         }
     }

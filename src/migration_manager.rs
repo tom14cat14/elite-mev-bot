@@ -47,11 +47,11 @@ pub struct MigrationAlert {
 
 #[derive(Debug, Clone, Serialize)]
 pub enum AlertType {
-    MigrationDetected,     // Token has migrated - immediate exit required
-    MigrationImminent,     // >90% progress - prepare for exit
-    MigrationWarning,      // >80% progress - warning
-    PositionExited,        // Position successfully exited
-    PositionExitFailed,    // Failed to exit position
+    MigrationDetected,  // Token has migrated - immediate exit required
+    MigrationImminent,  // >90% progress - prepare for exit
+    MigrationWarning,   // >80% progress - warning
+    PositionExited,     // Position successfully exited
+    PositionExitFailed, // Failed to exit position
 }
 
 impl MigrationManager {
@@ -70,7 +70,10 @@ impl MigrationManager {
             return Ok(());
         }
 
-        info!("🔄 Starting PumpFun migration monitoring (every {}s)", self.check_interval_seconds);
+        info!(
+            "🔄 Starting PumpFun migration monitoring (every {}s)",
+            self.check_interval_seconds
+        );
 
         let positions = self.active_positions.clone();
         let executor = self.pumpfun_executor.clone();
@@ -93,7 +96,10 @@ impl MigrationManager {
                     continue;
                 }
 
-                info!("🔍 Checking {} active PumpFun positions for migration", current_positions.len());
+                info!(
+                    "🔍 Checking {} active PumpFun positions for migration",
+                    current_positions.len()
+                );
 
                 // Check each position for migration
                 for (token_mint, position) in current_positions.iter() {
@@ -134,8 +140,11 @@ impl MigrationManager {
 
                             // Warn if approaching migration
                             if progress > 0.9 && !pos.exit_triggered {
-                                warn!("⚠️ Token {} at {}% migration progress - prepare for exit!",
-                                      token_mint, (progress * 100.0) as u32);
+                                warn!(
+                                    "⚠️ Token {} at {}% migration progress - prepare for exit!",
+                                    token_mint,
+                                    (progress * 100.0) as u32
+                                );
                             }
                         }
                     }
@@ -154,13 +163,15 @@ impl MigrationManager {
         let mut positions = self.active_positions.lock().unwrap();
         let token_mint = position.token_mint.clone();
 
-        info!("📍 Tracking new PumpFun position: {} {} tokens of {}",
-              match position.position_type {
-                  PositionType::Long => "LONG",
-                  PositionType::Short => "SHORT",
-              },
-              position.amount,
-              token_mint);
+        info!(
+            "📍 Tracking new PumpFun position: {} {} tokens of {}",
+            match position.position_type {
+                PositionType::Long => "LONG",
+                PositionType::Short => "SHORT",
+            },
+            position.amount,
+            token_mint
+        );
 
         positions.insert(token_mint, position);
         Ok(())
@@ -184,7 +195,8 @@ impl MigrationManager {
     /// Get positions that need immediate exit due to migration
     pub fn get_positions_requiring_exit(&self) -> Vec<ActivePosition> {
         let positions = self.active_positions.lock().unwrap();
-        positions.values()
+        positions
+            .values()
             .filter(|pos| pos.exit_triggered)
             .cloned()
             .collect()
@@ -192,7 +204,9 @@ impl MigrationManager {
 
     /// Check if a specific token is close to migration
     pub async fn is_token_risky(&self, token_mint: &str) -> Result<bool> {
-        self.pumpfun_executor.is_token_close_to_migration(token_mint).await
+        self.pumpfun_executor
+            .is_token_close_to_migration(token_mint)
+            .await
     }
 
     /// Get migration alerts for all active positions
@@ -202,7 +216,11 @@ impl MigrationManager {
 
         for (token_mint, position) in positions.iter() {
             // Check current migration status
-            if let Ok(progress) = self.pumpfun_executor.get_migration_progress(token_mint).await {
+            if let Ok(progress) = self
+                .pumpfun_executor
+                .get_migration_progress(token_mint)
+                .await
+            {
                 let alert_type = if position.exit_triggered {
                     AlertType::PositionExited
                 } else if progress >= 1.0 {
@@ -216,11 +234,25 @@ impl MigrationManager {
                 };
 
                 let message = match alert_type {
-                    AlertType::MigrationDetected => format!("Token {} has migrated! Exit immediately!", token_mint),
-                    AlertType::MigrationImminent => format!("Token {} at {}% - migration imminent!", token_mint, (progress * 100.0) as u32),
-                    AlertType::MigrationWarning => format!("Token {} at {}% - approaching migration", token_mint, (progress * 100.0) as u32),
-                    AlertType::PositionExited => format!("Position exited for token {}", token_mint),
-                    AlertType::PositionExitFailed => format!("Failed to exit position for token {}", token_mint),
+                    AlertType::MigrationDetected => {
+                        format!("Token {} has migrated! Exit immediately!", token_mint)
+                    }
+                    AlertType::MigrationImminent => format!(
+                        "Token {} at {}% - migration imminent!",
+                        token_mint,
+                        (progress * 100.0) as u32
+                    ),
+                    AlertType::MigrationWarning => format!(
+                        "Token {} at {}% - approaching migration",
+                        token_mint,
+                        (progress * 100.0) as u32
+                    ),
+                    AlertType::PositionExited => {
+                        format!("Position exited for token {}", token_mint)
+                    }
+                    AlertType::PositionExitFailed => {
+                        format!("Failed to exit position for token {}", token_mint)
+                    }
                 };
 
                 alerts.push(MigrationAlert {
@@ -279,7 +311,8 @@ impl MigrationManager {
         let positions = self.active_positions.lock().unwrap();
         let total_positions = positions.len();
         let positions_requiring_exit = positions.values().filter(|p| p.exit_triggered).count();
-        let oldest_position = positions.values()
+        let oldest_position = positions
+            .values()
             .map(|p| p.entry_time)
             .min()
             .unwrap_or_else(Utc::now);
@@ -289,7 +322,9 @@ impl MigrationManager {
             positions_requiring_exit,
             monitoring_enabled: self.monitoring_enabled,
             check_interval_seconds: self.check_interval_seconds,
-            oldest_position_age_minutes: Utc::now().signed_duration_since(oldest_position).num_minutes(),
+            oldest_position_age_minutes: Utc::now()
+                .signed_duration_since(oldest_position)
+                .num_minutes(),
         }
     }
 }

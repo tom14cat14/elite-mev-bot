@@ -1,11 +1,11 @@
 use anyhow::Result;
-use std::time::Instant;
-use tracing::{info, warn};
 use solana_entry::entry::Entry;
 use solana_sdk::transaction::VersionedTransaction;
+use std::time::Instant;
+use tracing::{info, warn};
 
+use crate::market_cap_filter::{MarketCapThresholds, ShredStreamTokenFilter, TokenMetrics};
 use crate::simd_bincode::SafeSimdBincode;
-use crate::market_cap_filter::{ShredStreamTokenFilter, MarketCapThresholds, TokenMetrics};
 
 /// High-performance ShredStream processor with SIMD and upfront filtering
 /// Implements Grok's recommendations for 1-3ms performance gains
@@ -20,18 +20,20 @@ pub struct OptimizedShredProcessor {
 impl OptimizedShredProcessor {
     pub fn new() -> Self {
         let thresholds = MarketCapThresholds {
-            minimum_market_cap_usd: 50_000.0,   // $50K minimum for processing
-            minimum_volume_24h_usd: 10_000.0,   // $10K daily volume
-            minimum_liquidity_usd: 5_000.0,     // $5K liquidity
-            minimum_holder_count: 50,           // 50+ holders
-            maximum_age_minutes: 30,            // 30 minute cache
+            minimum_market_cap_usd: 50_000.0, // $50K minimum for processing
+            minimum_volume_24h_usd: 10_000.0, // $10K daily volume
+            minimum_liquidity_usd: 5_000.0,   // $5K liquidity
+            minimum_holder_count: 50,         // 50+ holders
+            maximum_age_minutes: 30,          // 30 minute cache
         };
 
         let simd_enabled = crate::simd_bincode::SimdBincode::is_simd_supported();
 
         if simd_enabled {
-            info!("🚀 SIMD OPTIMIZATION: Enabled ({}) for ~5ms boost",
-                  crate::simd_bincode::SimdBincode::get_simd_capabilities());
+            info!(
+                "🚀 SIMD OPTIMIZATION: Enabled ({}) for ~5ms boost",
+                crate::simd_bincode::SimdBincode::get_simd_capabilities()
+            );
         } else {
             warn!("⚠️  SIMD OPTIMIZATION: Not available - using fallback");
         }
@@ -66,7 +68,10 @@ impl OptimizedShredProcessor {
             let mint = self.extract_mint_from_transaction(transaction);
 
             // Upfront filter using SIMD + market cap
-            if !self.token_filter.should_process_entry(entry_data, mint.as_deref()) {
+            if !self
+                .token_filter
+                .should_process_entry(entry_data, mint.as_deref())
+            {
                 filtered_transactions += 1;
                 continue;
             }
@@ -104,7 +109,11 @@ impl OptimizedShredProcessor {
         // This is a simplified version - in practice, you'd parse the instruction data
         if let Ok(tx_data) = SafeSimdBincode::serialize(transaction) {
             // Use SIMD to find PumpFun program ID
-            if self.token_filter.market_cap_filter().is_pumpfun_transaction(&tx_data) {
+            if self
+                .token_filter
+                .market_cap_filter()
+                .is_pumpfun_transaction(&tx_data)
+            {
                 // Extract mint from instruction accounts (first account after program)
                 if let Some(message) = transaction.message.static_account_keys().get(1) {
                     return Some(message.to_string());
@@ -115,10 +124,18 @@ impl OptimizedShredProcessor {
     }
 
     /// Analyze transaction for MEV opportunities
-    fn analyze_transaction(&self, transaction: &VersionedTransaction, mint: Option<String>) -> Result<Option<MEVOpportunity>> {
+    fn analyze_transaction(
+        &self,
+        transaction: &VersionedTransaction,
+        mint: Option<String>,
+    ) -> Result<Option<MEVOpportunity>> {
         if let Some(mint_str) = mint {
             // Check if this is a high-value migration candidate
-            if self.token_filter.market_cap_filter().passes_pre_migration_filter(&mint_str) {
+            if self
+                .token_filter
+                .market_cap_filter()
+                .passes_pre_migration_filter(&mint_str)
+            {
                 return Ok(Some(MEVOpportunity {
                     mint: mint_str,
                     opportunity_type: OpportunityType::PreMigration,
@@ -129,7 +146,11 @@ impl OptimizedShredProcessor {
             }
 
             // Check bonding curve completion
-            if let Some(true) = self.token_filter.market_cap_filter().is_bonding_curve_complete(&mint_str) {
+            if let Some(true) = self
+                .token_filter
+                .market_cap_filter()
+                .is_bonding_curve_complete(&mint_str)
+            {
                 return Ok(Some(MEVOpportunity {
                     mint: mint_str,
                     opportunity_type: OpportunityType::BondingCurveComplete,
@@ -174,13 +195,24 @@ impl OptimizedShredProcessor {
         let stats = self.get_performance_stats();
 
         info!("⚡ OPTIMIZED SHRED PROCESSOR PERFORMANCE:");
-        info!("  • Processed: {} entries | Filtered: {} transactions",
-              stats.processed_count, stats.filtered_count);
-        info!("  • Avg Processing: {}μs | SIMD: {}",
-              stats.average_processing_time_us, if stats.simd_enabled { "✅" } else { "❌" });
-        info!("  • Filter Efficiency: {:.1}% | Cache Hit Rate: {:.1}%",
-              stats.filter_efficiency * 100.0, stats.cache_hit_rate * 100.0);
-        info!("  • Est. Time Saved: {:.2}ms", stats.estimated_time_saved_ms);
+        info!(
+            "  • Processed: {} entries | Filtered: {} transactions",
+            stats.processed_count, stats.filtered_count
+        );
+        info!(
+            "  • Avg Processing: {}μs | SIMD: {}",
+            stats.average_processing_time_us,
+            if stats.simd_enabled { "✅" } else { "❌" }
+        );
+        info!(
+            "  • Filter Efficiency: {:.1}% | Cache Hit Rate: {:.1}%",
+            stats.filter_efficiency * 100.0,
+            stats.cache_hit_rate * 100.0
+        );
+        info!(
+            "  • Est. Time Saved: {:.2}ms",
+            stats.estimated_time_saved_ms
+        );
 
         if stats.simd_enabled && stats.filter_efficiency > 0.5 {
             info!("  • Status: 🔥 MAXIMUM OPTIMIZATION ACTIVE");

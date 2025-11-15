@@ -1,3 +1,4 @@
+use crate::mev_sandwich_detector::{detect_sandwich_opportunities, SandwichConfig};
 use anyhow::Result;
 use bytes::BytesMut;
 use futures::StreamExt;
@@ -6,8 +7,7 @@ use solana_stream_sdk::ShredstreamClient;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
-use tracing::{info, warn, debug, error};
-use crate::mev_sandwich_detector::{detect_sandwich_opportunities, SandwichConfig};
+use tracing::{debug, error, info, warn};
 
 pub struct ShredStreamProcessor {
     pub endpoint: String,
@@ -42,10 +42,15 @@ impl ShredStreamProcessor {
         // Connect ONCE to ShredStream with 10-second timeout (fail fast, retry in main loop)
         let mut client = match tokio::time::timeout(
             tokio::time::Duration::from_secs(10),
-            ShredstreamClient::connect(&self.endpoint)
-        ).await {
+            ShredstreamClient::connect(&self.endpoint),
+        )
+        .await
+        {
             Ok(Ok(client)) => {
-                info!("✅ ShredStream connected successfully in {:.2}ms", start.elapsed().as_millis());
+                info!(
+                    "✅ ShredStream connected successfully in {:.2}ms",
+                    start.elapsed().as_millis()
+                );
                 client
             }
             Ok(Err(e)) => {
@@ -54,7 +59,9 @@ impl ShredStreamProcessor {
             }
             Err(_) => {
                 error!("❌ ShredStream connection TIMEOUT after 10 seconds");
-                return Err(anyhow::anyhow!("ShredStream connection timeout - will retry"));
+                return Err(anyhow::anyhow!(
+                    "ShredStream connection timeout - will retry"
+                ));
             }
         };
 
@@ -87,7 +94,8 @@ impl ShredStreamProcessor {
 
                             // MEV SANDWICH DETECTION - Detect victim swaps
                             let sandwich_config = SandwichConfig::default();
-                            let sandwich_opps = detect_sandwich_opportunities(&entries, &sandwich_config);
+                            let sandwich_opps =
+                                detect_sandwich_opportunities(&entries, &sandwich_config);
 
                             if !sandwich_opps.is_empty() {
                                 info!("🎯 {} sandwich opportunities detected in slot {} | Total entries: {}",
@@ -114,7 +122,8 @@ impl ShredStreamProcessor {
                                         self.buffer.extend_from_slice(&serialized);
 
                                         // Filter for PumpFun opportunities
-                                        if let Ok(count) = self.filter_pumpfun_shreds(&self.buffer) {
+                                        if let Ok(count) = self.filter_pumpfun_shreds(&self.buffer)
+                                        {
                                             if count > 0 {
                                                 opportunities += count;
                                             }
@@ -128,7 +137,10 @@ impl ShredStreamProcessor {
                                 let latency_us = start.elapsed().as_micros() as f64;
 
                                 if total_entries % 100 == 0 {
-                                    debug!("📊 ShredStream: {} entries processed, slot {}", total_entries, slot);
+                                    debug!(
+                                        "📊 ShredStream: {} entries processed, slot {}",
+                                        total_entries, slot
+                                    );
                                 }
 
                                 return Ok(ShredStreamEvent {
@@ -184,7 +196,10 @@ impl ShredStreamProcessor {
             let pumpfun_bytes = bs58::decode(_pumpfun_program).into_vec().ok();
             if let Some(program_id) = pumpfun_bytes {
                 // Simple pattern matching - look for program ID in tx data
-                if data.windows(program_id.len()).any(|window| window == program_id.as_slice()) {
+                if data
+                    .windows(program_id.len())
+                    .any(|window| window == program_id.as_slice())
+                {
                     return Ok(1); // Found PumpFun transaction!
                 }
             }

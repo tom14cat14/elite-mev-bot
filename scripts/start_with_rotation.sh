@@ -1,53 +1,64 @@
 #!/bin/bash
-# Start MEV Bot with automatic log rotation
-# Rotates logs every 5 minutes to prevent disk bloat
+# MEV Bot Startup Script with Automatic Log Rotation
+# Starts bot and schedules automatic log rotation
 
-cd "$(dirname "$0")/.." || exit 1
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MEV_BOT_DIR="/home/tom14cat14/MEV_Bot"
 
-# Load environment
-set -a
-source .env.multidex 2>/dev/null || source .env
-set +a
+echo "=== MEV Bot Startup Script ==="
+echo ""
 
-# Ensure rotation script exists
-ROTATION_SCRIPT="./scripts/rotate_logs.sh"
-if [ ! -f "$ROTATION_SCRIPT" ]; then
-    echo "Error: Rotation script not found at $ROTATION_SCRIPT"
+# Check if bot is already running
+if pgrep -f elite_mev_bot_v2_1_production > /dev/null; then
+    echo "⚠️  MEV bot is already running (PID: $(pgrep -f elite_mev_bot_v2_1_production))"
+    echo "Stop it first with: killall elite_mev_bot_v2_1_production"
     exit 1
 fi
 
-# Start log rotation in background (every 5 minutes)
-(
-    while true; do
-        sleep 300  # 5 minutes
-        "$ROTATION_SCRIPT"
-    done
-) &
-ROTATION_PID=$!
+# Check if rotation script exists
+if [ ! -f "$SCRIPT_DIR/rotate_logs.sh" ]; then
+    echo "❌ Log rotation script not found: $SCRIPT_DIR/rotate_logs.sh"
+    exit 1
+fi
 
-echo "Log rotation started (PID: $ROTATION_PID)"
-echo "Starting MEV Bot..."
+# Add log rotation to crontab (runs every hour)
+CRON_LINE="0 * * * * $SCRIPT_DIR/rotate_logs.sh >> /tmp/mev_log_rotation.log 2>&1"
 
-# Start the bot
-./target/release/elite_mev_bot_v2_1_production > /tmp/mev_multidex.log 2>&1 &
-BOT_PID=$!
+# Check if cron job already exists
+if ! crontab -l 2>/dev/null | grep -q "rotate_logs.sh"; then
+    echo "📅 Adding hourly log rotation to crontab..."
+    (crontab -l 2>/dev/null; echo "$CRON_LINE") | crontab -
+    echo "✅ Cron job added (runs every hour)"
+else
+    echo "✅ Log rotation cron job already exists"
+fi
 
-echo "MEV Bot started (PID: $BOT_PID)"
-echo "Logs: /tmp/mev_multidex.log"
-echo "Press Ctrl+C to stop"
+# Show crontab
+echo ""
+echo "Current crontab for MEV bot:"
+crontab -l 2>/dev/null | grep -E "(rotate_logs|MEV)" || echo "No MEV-related cron jobs"
 
-# Cleanup function
-cleanup() {
-    echo "Stopping MEV Bot..."
-    kill $BOT_PID 2>/dev/null
-    kill $ROTATION_PID 2>/dev/null
-    wait $BOT_PID 2>/dev/null
-    wait $ROTATION_PID 2>/dev/null
-    echo "Stopped"
-    exit 0
-}
+echo ""
+echo "=== Starting MEV Bot ==="
+cd "$MEV_BOT_DIR" || exit 1
 
-trap cleanup SIGINT SIGTERM
+# Start bot with multi-DEX config
+bash -c "set -a && source .env.multidex && set +a && ./target/release/elite_mev_bot_v2_1_production > /tmp/mev_multidex.log 2>&1 &"
 
-# Wait for bot to finish
-wait $BOT_PID
+# Wait for startup
+sleep 3
+
+# Verify bot is running
+if pgrep -f elite_mev_bot_v2_1_production > /dev/null; then
+    echo "✅ MEV bot started successfully (PID: $(pgrep -f elite_mev_bot_v2_1_production))"
+    echo ""
+    echo "📊 Log file: /tmp/mev_multidex.log"
+    echo "📅 Log rotation: Automatic (every hour, 100MB max, keeps 5 files)"
+    echo ""
+    echo "View logs: tail -f /tmp/mev_multidex.log"
+    echo "Stop bot: killall elite_mev_bot_v2_1_production"
+    echo "Manual rotation: $SCRIPT_DIR/rotate_logs.sh"
+else
+    echo "❌ Failed to start MEV bot"
+    exit 1
+fi

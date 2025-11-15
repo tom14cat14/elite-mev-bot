@@ -44,7 +44,11 @@ impl JupiterExecutor {
     }
 
     /// Create new executor with custom cache settings
-    pub fn new_with_cache(api_key: String, cache_ttl_seconds: u64, max_cache_entries: usize) -> Self {
+    pub fn new_with_cache(
+        api_key: String,
+        cache_ttl_seconds: u64,
+        max_cache_entries: usize,
+    ) -> Self {
         Self {
             rate_limiter: JupiterRateLimiter::new(api_key),
             route_cache: RouteCache::new(cache_ttl_seconds, max_cache_entries),
@@ -56,13 +60,16 @@ impl JupiterExecutor {
     pub async fn execute_swap(&self, params: ExecutionParams) -> Result<ExecutionResult> {
         let start_time = std::time::Instant::now();
 
-        debug!("Executing Jupiter swap: {} -> {} (amount: {})",
-               params.input_mint, params.output_mint, params.amount);
+        debug!(
+            "Executing Jupiter swap: {} -> {} (amount: {})",
+            params.input_mint, params.output_mint, params.amount
+        );
 
         // Step 1: Create order using Jupiter Ultra API
         let order_request = self.build_order_request(params.clone())?;
 
-        match self.rate_limiter
+        match self
+            .rate_limiter
             .execute_request::<Value>("/ultra/v1/order", Some(order_request))
             .await
         {
@@ -70,7 +77,8 @@ impl JupiterExecutor {
                 let execution_time = start_time.elapsed().as_millis() as u64;
 
                 // Extract transaction data
-                let signature = swap_response.get("txid")
+                let signature = swap_response
+                    .get("txid")
                     .and_then(|v| v.as_str())
                     .map(String::from);
 
@@ -78,8 +86,10 @@ impl JupiterExecutor {
                 let actual_amount_out = self.extract_output_amount(&swap_response);
                 let actual_profit_sol = self.calculate_actual_profit(&params, actual_amount_out);
 
-                info!("Jupiter swap executed successfully in {}ms: {:?}",
-                      execution_time, signature);
+                info!(
+                    "Jupiter swap executed successfully in {}ms: {:?}",
+                    execution_time, signature
+                );
 
                 Ok(ExecutionResult {
                     success: true,
@@ -163,13 +173,18 @@ impl JupiterExecutor {
     fn extract_output_amount(&self, response: &Value) -> Option<u64> {
         // This is simplified - you'd need to parse the actual transaction logs
         // to get the real output amount
-        response.get("outAmount")
+        response
+            .get("outAmount")
             .and_then(|v| v.as_str())
             .and_then(|s| s.parse().ok())
     }
 
     /// Calculate actual profit in SOL
-    fn calculate_actual_profit(&self, params: &ExecutionParams, actual_output: Option<u64>) -> Option<f64> {
+    fn calculate_actual_profit(
+        &self,
+        params: &ExecutionParams,
+        actual_output: Option<u64>,
+    ) -> Option<f64> {
         // This is simplified - you'd need proper token price conversion
         // For now, assuming we can convert token amounts to SOL equivalent
         if let Some(output) = actual_output {
@@ -206,11 +221,17 @@ impl JupiterExecutor {
     ) -> Option<Value> {
         // Check cache first for 5ms response
         if let Some(cached_route) = self.route_cache.get_route(input_mint, output_mint, amount) {
-            debug!("💰 Route cache HIT for {}->{} ({})", input_mint, output_mint, amount);
+            debug!(
+                "💰 Route cache HIT for {}->{} ({})",
+                input_mint, output_mint, amount
+            );
             return Some(cached_route);
         }
 
-        debug!("❌ Route cache MISS for {}->{} ({})", input_mint, output_mint, amount);
+        debug!(
+            "❌ Route cache MISS for {}->{} ({})",
+            input_mint, output_mint, amount
+        );
         None
     }
 
@@ -224,8 +245,12 @@ impl JupiterExecutor {
         custom_ttl_seconds: Option<u64>,
     ) {
         let custom_ttl = custom_ttl_seconds.map(Duration::from_secs);
-        self.route_cache.store_route(input_mint, output_mint, amount, route_data, custom_ttl);
-        debug!("💾 Stored route in cache: {}->{} ({})", input_mint, output_mint, amount);
+        self.route_cache
+            .store_route(input_mint, output_mint, amount, route_data, custom_ttl);
+        debug!(
+            "💾 Stored route in cache: {}->{} ({})",
+            input_mint, output_mint, amount
+        );
     }
 
     /// Get route cache statistics for monitoring
@@ -251,7 +276,8 @@ impl JupiterExecutor {
     /// Health check for Jupiter Ultra API connectivity
     pub async fn health_check(&self) -> Result<bool> {
         // Use a simple GET request to test Ultra API connectivity
-        match self.rate_limiter
+        match self
+            .rate_limiter
             .execute_request::<Value>("/ultra/v1/order?orderId=test", None)
             .await
         {
@@ -262,8 +288,14 @@ impl JupiterExecutor {
             Err(e) => {
                 let error_msg = e.to_string();
                 // Ultra API may return 400/404 for invalid order ID, but that means API is responding
-                if error_msg.contains("400") || error_msg.contains("404") || error_msg.contains("Bad Request") || error_msg.contains("Not Found") {
-                    debug!("Jupiter Ultra API health check passed (400/404 expected for test order)");
+                if error_msg.contains("400")
+                    || error_msg.contains("404")
+                    || error_msg.contains("Bad Request")
+                    || error_msg.contains("Not Found")
+                {
+                    debug!(
+                        "Jupiter Ultra API health check passed (400/404 expected for test order)"
+                    );
                     Ok(true)
                 } else {
                     warn!("Jupiter Ultra API health check failed: {}", e);

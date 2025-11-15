@@ -4,7 +4,7 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use tokio::fs;
 use tokio::time::interval;
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
 
 /// Dynamic configuration that can be updated at runtime
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -83,7 +83,7 @@ impl Default for DynamicMevConfig {
             },
             circuit_breakers: CircuitBreakerConfig {
                 max_consecutive_failures: 5,
-                failure_rate_threshold: 0.3, // 30% failure rate
+                failure_rate_threshold: 0.3,    // 30% failure rate
                 cooldown_duration_seconds: 300, // 5 minutes
                 enable_volatility_protection: true,
                 market_impact_threshold: 0.1, // 10% market impact
@@ -133,7 +133,8 @@ impl DynamicConfigManager {
                 if let Ok(metadata) = fs::metadata(&file_path).await {
                     if let Ok(modified) = metadata.modified() {
                         // File has been modified, reload config
-                        if let Err(e) = Self::reload_config_static(&config_clone, &file_path).await {
+                        if let Err(e) = Self::reload_config_static(&config_clone, &file_path).await
+                        {
                             error!("Failed to reload config: {}", e);
                         }
                     }
@@ -157,7 +158,10 @@ impl DynamicConfigManager {
                 let default_config = DynamicMevConfig::default();
                 self.save_config_to_file(&default_config).await?;
                 self.update_config(default_config).await?;
-                info!("📁 Created default configuration file: {}", self.config_file_path);
+                info!(
+                    "📁 Created default configuration file: {}",
+                    self.config_file_path
+                );
             }
         }
         Ok(())
@@ -175,7 +179,10 @@ impl DynamicConfigManager {
             let mut config_guard = config.write().unwrap();
             if new_config.version > config_guard.version {
                 *config_guard = new_config;
-                info!("🔄 Configuration hot-reloaded (version: {})", config_guard.version);
+                info!(
+                    "🔄 Configuration hot-reloaded (version: {})",
+                    config_guard.version
+                );
             }
         }
 
@@ -253,12 +260,16 @@ impl DynamicConfigManager {
             return Err(anyhow::anyhow!("Invalid position size"));
         }
 
-        if config.risk_management.quality_threshold < 0.0 || config.risk_management.quality_threshold > 10.0 {
+        if config.risk_management.quality_threshold < 0.0
+            || config.risk_management.quality_threshold > 10.0
+        {
             return Err(anyhow::anyhow!("Invalid quality threshold"));
         }
 
         // Trading validation
-        if config.trading_params.max_slippage_percentage < 0.0 || config.trading_params.max_slippage_percentage > 50.0 {
+        if config.trading_params.max_slippage_percentage < 0.0
+            || config.trading_params.max_slippage_percentage > 50.0
+        {
             return Err(anyhow::anyhow!("Invalid slippage percentage"));
         }
 
@@ -315,7 +326,8 @@ impl ErrorRecoveryManager {
         warn!("🔥 Error #{}: {}", self.consecutive_failures, error);
 
         // Apply recovery strategy based on failure count
-        let strategy_index = (self.consecutive_failures - 1).min(self.recovery_strategies.len() as u32 - 1) as usize;
+        let strategy_index =
+            (self.consecutive_failures - 1).min(self.recovery_strategies.len() as u32 - 1) as usize;
         let strategy = self.recovery_strategies[strategy_index].clone();
 
         match strategy {
@@ -331,7 +343,10 @@ impl ErrorRecoveryManager {
                 config.performance_tuning.target_latency_ms *= factor;
                 config.version += 1;
                 config_manager.update_config(config).await?;
-                info!("⏱️ Increased latency target by {:.0}%", (factor - 1.0) * 100.0);
+                info!(
+                    "⏱️ Increased latency target by {:.0}%",
+                    (factor - 1.0) * 100.0
+                );
             }
             RecoveryStrategy::SwitchToBackupEndpoint => {
                 info!("🔄 Switching to backup endpoint");

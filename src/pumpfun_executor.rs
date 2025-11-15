@@ -1,11 +1,11 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use solana_sdk::{
-    instruction::{Instruction, AccountMeta},
+    instruction::{AccountMeta, Instruction},
+    message::Message,
     pubkey::Pubkey,
     signature::Signature,
     transaction::Transaction,
-    message::Message,
 };
 use std::str::FromStr;
 use std::time::Instant;
@@ -17,19 +17,19 @@ use crate::wallet_manager::WalletManager;
 const PUMPFUN_PROGRAM_ID: &str = "PumpFunP4PfMpqd7KsAEL7NKPhpq6M4yDmMRr2tH6gN";
 
 // CONSTANTS: Transaction fee estimates and safety margins
-const ESTIMATED_GAS_LAMPORTS: u64 = 50_000;  // ~0.00005 SOL for transaction fees
-const SAFETY_BUFFER_LAMPORTS: u64 = 5_000_000;  // 0.005 SOL safety reserve for rent + unexpected fees
-const SOL_DECIMALS: u64 = 1_000_000_000;  // 1 SOL = 1 billion lamports
+const ESTIMATED_GAS_LAMPORTS: u64 = 50_000; // ~0.00005 SOL for transaction fees
+const SAFETY_BUFFER_LAMPORTS: u64 = 5_000_000; // 0.005 SOL safety reserve for rent + unexpected fees
+const SOL_DECIMALS: u64 = 1_000_000_000; // 1 SOL = 1 billion lamports
 
 // CONSTANTS: Bonding curve thresholds
-const BONDING_CURVE_MIGRATION_SOL: u64 = 85_000_000_000;  // ~85 SOL triggers migration to Raydium
-const MINIMUM_REAL_RESERVES: u64 = 1_000_000;  // 0.001 SOL minimum to consider active
+const BONDING_CURVE_MIGRATION_SOL: u64 = 85_000_000_000; // ~85 SOL triggers migration to Raydium
+const MINIMUM_REAL_RESERVES: u64 = 1_000_000; // 0.001 SOL minimum to consider active
 
 /// PumpFun bonding curve executor for pre-migration token trading
 pub struct PumpFunExecutor {
     wallet_manager: WalletManager,
     program_id: Pubkey,
-    rpc_client: Option<std::sync::Arc<solana_rpc_client::rpc_client::RpcClient>>,  // SECURITY FIX: For balance validation
+    rpc_client: Option<std::sync::Arc<solana_rpc_client::rpc_client::RpcClient>>, // SECURITY FIX: For balance validation
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -71,7 +71,7 @@ impl PumpFunExecutor {
         Ok(Self {
             wallet_manager,
             program_id,
-            rpc_client: None,  // No RPC client, balance validation disabled
+            rpc_client: None, // No RPC client, balance validation disabled
         })
     }
 
@@ -91,39 +91,38 @@ impl PumpFunExecutor {
     }
 
     /// Execute a buy order on PumpFun bonding curve (SOL -> Token)
-    pub async fn execute_buy(
-        &self,
-        params: PumpFunSwapParams,
-    ) -> Result<PumpFunSwapResult> {
+    pub async fn execute_buy(&self, params: PumpFunSwapParams) -> Result<PumpFunSwapResult> {
         if !params.is_buy {
             return Err(anyhow::anyhow!("Use execute_buy only for SOL->Token swaps"));
         }
 
-        debug!("Executing PumpFun buy: {} SOL for {} tokens",
-               params.amount_in as f64 / 1e9, params.token_mint);
+        debug!(
+            "Executing PumpFun buy: {} SOL for {} tokens",
+            params.amount_in as f64 / 1e9,
+            params.token_mint
+        );
 
         self.execute_swap_internal(params).await
     }
 
     /// Execute a sell order on PumpFun bonding curve (Token -> SOL)
-    pub async fn execute_sell(
-        &self,
-        params: PumpFunSwapParams,
-    ) -> Result<PumpFunSwapResult> {
+    pub async fn execute_sell(&self, params: PumpFunSwapParams) -> Result<PumpFunSwapResult> {
         if params.is_buy {
-            return Err(anyhow::anyhow!("Use execute_sell only for Token->SOL swaps"));
+            return Err(anyhow::anyhow!(
+                "Use execute_sell only for Token->SOL swaps"
+            ));
         }
 
-        debug!("Executing PumpFun sell: {} tokens for SOL", params.amount_in);
+        debug!(
+            "Executing PumpFun sell: {} tokens for SOL",
+            params.amount_in
+        );
 
         self.execute_swap_internal(params).await
     }
 
     /// Internal swap execution with bonding curve calculation
-    async fn execute_swap_internal(
-        &self,
-        params: PumpFunSwapParams,
-    ) -> Result<PumpFunSwapResult> {
+    async fn execute_swap_internal(&self, params: PumpFunSwapParams) -> Result<PumpFunSwapResult> {
         let start_time = Instant::now();
 
         // SECURITY FIX: Validate wallet balance before attempting trade
@@ -134,18 +133,22 @@ impl PumpFunExecutor {
                 Ok(balance_lamports) => {
                     // Calculate total required: trade amount + gas fees + safety buffer
                     let trade_amount_lamports = if params.is_buy {
-                        params.amount_in  // For buy, amount_in is SOL
+                        params.amount_in // For buy, amount_in is SOL
                     } else {
-                        0  // For sell, we're selling tokens not SOL
+                        0 // For sell, we're selling tokens not SOL
                     };
 
-                    let total_required = trade_amount_lamports + ESTIMATED_GAS_LAMPORTS + SAFETY_BUFFER_LAMPORTS;
+                    let total_required =
+                        trade_amount_lamports + ESTIMATED_GAS_LAMPORTS + SAFETY_BUFFER_LAMPORTS;
 
                     if balance_lamports < total_required {
                         let balance_sol = balance_lamports as f64 / SOL_DECIMALS as f64;
                         let required_sol = total_required as f64 / SOL_DECIMALS as f64;
 
-                        warn!("Insufficient balance: have {:.6} SOL, need {:.6} SOL", balance_sol, required_sol);
+                        warn!(
+                            "Insufficient balance: have {:.6} SOL, need {:.6} SOL",
+                            balance_sol, required_sol
+                        );
 
                         return Ok(PumpFunSwapResult {
                             success: false,
@@ -159,12 +162,17 @@ impl PumpFunExecutor {
                         });
                     }
 
-                    debug!("Balance validation passed: {:.6} SOL available, {:.6} SOL required",
-                           balance_lamports as f64 / SOL_DECIMALS as f64,
-                           total_required as f64 / SOL_DECIMALS as f64);
+                    debug!(
+                        "Balance validation passed: {:.6} SOL available, {:.6} SOL required",
+                        balance_lamports as f64 / SOL_DECIMALS as f64,
+                        total_required as f64 / SOL_DECIMALS as f64
+                    );
                 }
                 Err(e) => {
-                    warn!("Failed to fetch wallet balance, proceeding without validation: {}", e);
+                    warn!(
+                        "Failed to fetch wallet balance, proceeding without validation: {}",
+                        e
+                    );
                     // Continue anyway - balance check is a safety measure, not a hard requirement
                 }
             }
@@ -211,8 +219,10 @@ impl PumpFunExecutor {
                 signature: None,
                 actual_amount_out: Some(expected_output),
                 execution_time_ms: start_time.elapsed().as_millis() as u64,
-                error_message: Some(format!("Slippage too high: expected {}, minimum {}",
-                                          expected_output, params.minimum_amount_out)),
+                error_message: Some(format!(
+                    "Slippage too high: expected {}, minimum {}",
+                    expected_output, params.minimum_amount_out
+                )),
             });
         }
 
@@ -251,13 +261,13 @@ impl PumpFunExecutor {
         // Derive bonding curve PDA
         let (bonding_curve, _) = Pubkey::find_program_address(
             &[b"bonding-curve", token_mint_pubkey.as_ref()],
-            &self.program_id
+            &self.program_id,
         );
 
         // Derive associated bonding curve PDA
         let (associated_bonding_curve, _) = Pubkey::find_program_address(
             &[b"bonding-curve", token_mint_pubkey.as_ref()],
-            &self.program_id
+            &self.program_id,
         );
 
         // TODO: Fetch actual account data from RPC
@@ -284,9 +294,11 @@ impl PumpFunExecutor {
         let new_token_reserves = k / new_sol_reserves;
         let token_output = state.virtual_token_reserves - new_token_reserves;
 
-        debug!("Buy calculation: {} SOL -> {} tokens",
-               sol_input as f64 / SOL_DECIMALS as f64,
-               token_output as f64 / SOL_DECIMALS as f64);
+        debug!(
+            "Buy calculation: {} SOL -> {} tokens",
+            sol_input as f64 / SOL_DECIMALS as f64,
+            token_output as f64 / SOL_DECIMALS as f64
+        );
 
         Ok(token_output)
     }
@@ -300,9 +312,11 @@ impl PumpFunExecutor {
         let new_sol_reserves = k / new_token_reserves;
         let sol_output = state.virtual_sol_reserves - new_sol_reserves;
 
-        debug!("Sell calculation: {} tokens -> {} SOL",
-               token_input as f64 / SOL_DECIMALS as f64,
-               sol_output as f64 / SOL_DECIMALS as f64);
+        debug!(
+            "Sell calculation: {} tokens -> {} SOL",
+            token_input as f64 / SOL_DECIMALS as f64,
+            sol_output as f64 / SOL_DECIMALS as f64
+        );
 
         Ok(sol_output)
     }
@@ -369,15 +383,18 @@ impl PumpFunExecutor {
         match self.get_bonding_curve_state(token_mint).await {
             Ok(state) => {
                 // Check multiple migration indicators
-                let is_migrated = state.complete ||
-                                 state.virtual_sol_reserves >= BONDING_CURVE_MIGRATION_SOL ||
-                                 state.real_sol_reserves <= MINIMUM_REAL_RESERVES;
+                let is_migrated = state.complete
+                    || state.virtual_sol_reserves >= BONDING_CURVE_MIGRATION_SOL
+                    || state.real_sol_reserves <= MINIMUM_REAL_RESERVES;
 
                 if is_migrated {
-                    info!("🔄 Token {} has migrated: complete={}, virtual_sol={}, real_sol={}",
-                          token_mint, state.complete,
-                          state.virtual_sol_reserves as f64 / 1e9,
-                          state.real_sol_reserves as f64 / 1e9);
+                    info!(
+                        "🔄 Token {} has migrated: complete={}, virtual_sol={}, real_sol={}",
+                        token_mint,
+                        state.complete,
+                        state.virtual_sol_reserves as f64 / 1e9,
+                        state.real_sol_reserves as f64 / 1e9
+                    );
                 }
 
                 Ok(is_migrated)
@@ -413,15 +430,21 @@ impl PumpFunExecutor {
 
         // Check if migration has occurred
         if state.complete {
-            info!("🚨 MIGRATION DETECTED: Token {} bonding curve is now complete!", token_mint);
+            info!(
+                "🚨 MIGRATION DETECTED: Token {} bonding curve is now complete!",
+                token_mint
+            );
             return Ok(true);
         }
 
         // Check if close to migration (warning)
         let progress = (state.virtual_sol_reserves as f64) / 85_000_000_000.0;
         if progress > 0.9 {
-            warn!("⚠️ MIGRATION WARNING: Token {} is {}% to migration!",
-                  token_mint, (progress * 100.0) as u32);
+            warn!(
+                "⚠️ MIGRATION WARNING: Token {} is {}% to migration!",
+                token_mint,
+                (progress * 100.0) as u32
+            );
         }
 
         Ok(false)
@@ -430,8 +453,8 @@ impl PumpFunExecutor {
     /// Get current token price in SOL
     pub async fn get_token_price_sol(&self, token_mint: &str) -> Result<f64> {
         let state = self.get_bonding_curve_state(token_mint).await?;
-        let price_per_token = state.virtual_sol_reserves as f64 / state.virtual_token_reserves as f64;
+        let price_per_token =
+            state.virtual_sol_reserves as f64 / state.virtual_token_reserves as f64;
         Ok(price_per_token)
     }
-
 }
