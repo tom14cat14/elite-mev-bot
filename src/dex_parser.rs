@@ -141,21 +141,20 @@ impl DexSwapParser {
             let program_id = account_keys[program_id_index];
 
             for dex_info in &self.dex_programs {
-                if program_id == dex_info.program_id
-                    && instruction.data.len() >= 8 {
-                        let discriminator = &instruction.data[0..8];
-                        if discriminator == dex_info.swap_discriminator.as_slice() {
-                            return self
-                                .parse_swap_instruction(
-                                    account_keys,
-                                    instruction,
-                                    &dex_info.name,
-                                    &signature,
-                                    slot,
-                                )
-                                .await;
-                        }
+                if program_id == dex_info.program_id && instruction.data.len() >= 8 {
+                    let discriminator = &instruction.data[0..8];
+                    if discriminator == dex_info.swap_discriminator.as_slice() {
+                        return self
+                            .parse_swap_instruction(
+                                account_keys,
+                                instruction,
+                                &dex_info.name,
+                                &signature,
+                                slot,
+                            )
+                            .await;
                     }
+                }
             }
         }
 

@@ -221,7 +221,8 @@ impl PumpFunNewCoinDetector {
                             // Create NewTokenEvent for tracking
                             let new_token = NewTokenEvent {
                                 mint: token_mint,
-                                creator: account_keys.first()
+                                creator: account_keys
+                                    .first()
                                     .map(|k| **k)
                                     .unwrap_or(Pubkey::new_unique()),
                                 initial_sol_raised: 0.0, // Will be tracked as buys come in

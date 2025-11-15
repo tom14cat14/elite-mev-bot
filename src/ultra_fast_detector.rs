@@ -503,12 +503,7 @@ impl UltraFastNewCoinDetector {
         // This should complete in <2ms
 
         // Check 1: Basic sanity checks
-        if token
-            .candidate
-            .symbol
-            .as_ref()
-            .is_none_or(|s| s.is_empty())
-        {
+        if token.candidate.symbol.as_ref().is_none_or(|s| s.is_empty()) {
             return Ok(false);
         }
 

@@ -412,7 +412,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_price_update() {
-        let monitor = RealtimePriceMonitor::new("test_endpoint".to_string(), "https://api.mainnet-beta.solana.com".to_string());
+        let monitor = RealtimePriceMonitor::new(
+            "test_endpoint".to_string(),
+            "https://api.mainnet-beta.solana.com".to_string(),
+        );
 
         monitor
             .update_price(
@@ -431,7 +434,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_filtering() {
-        let monitor = RealtimePriceMonitor::new("test_endpoint".to_string(), "https://api.mainnet-beta.solana.com".to_string());
+        let monitor = RealtimePriceMonitor::new(
+            "test_endpoint".to_string(),
+            "https://api.mainnet-beta.solana.com".to_string(),
+        );
 
         // Add some prices
         for i in 0..10 {

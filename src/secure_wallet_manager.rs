@@ -66,8 +66,7 @@ pub enum KmsProvider {
     HashiCorpVault,
 }
 
-#[derive(Debug, Clone)]
-#[derive(Default)]
+#[derive(Debug, Clone, Default)]
 pub struct SecurityMetrics {
     pub total_wallets: usize,
     pub active_wallets: usize,
@@ -588,4 +587,3 @@ pub struct SecurityAuditReport {
     pub issues: Vec<String>,
     pub recommendations: Vec<String>,
 }
-

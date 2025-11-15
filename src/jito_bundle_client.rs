@@ -3,11 +3,8 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use solana_rpc_client::rpc_client::RpcClient;
 use solana_sdk::{
-    compute_budget::ComputeBudgetInstruction,
-    pubkey::Pubkey,
-    signature::Signer,
-    system_instruction,
-    transaction::Transaction,
+    compute_budget::ComputeBudgetInstruction, pubkey::Pubkey, signature::Signer,
+    system_instruction, transaction::Transaction,
 };
 use std::sync::Arc;
 use std::time::{Duration, Instant};

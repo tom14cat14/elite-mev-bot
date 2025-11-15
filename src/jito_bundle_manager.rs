@@ -520,7 +520,6 @@ impl Default for BundleStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     #[test]
     fn test_bundle_manager_creation() {

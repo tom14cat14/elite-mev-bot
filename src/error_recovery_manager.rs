@@ -26,8 +26,7 @@ pub struct RetryPolicy {
     pub jitter_factor: f64,
 }
 
-#[derive(Debug, Clone)]
-#[derive(Default)]
+#[derive(Debug, Clone, Default)]
 pub struct FailureStatistics {
     pub transaction_timeouts: u64,
     pub invalid_blockhashes: u64,
@@ -80,7 +79,6 @@ impl Default for RetryPolicy {
         }
     }
 }
-
 
 impl Default for CircuitBreakerState {
     fn default() -> Self {

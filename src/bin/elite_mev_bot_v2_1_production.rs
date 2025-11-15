@@ -3596,8 +3596,7 @@ async fn execute_new_coin_opportunity(
         .and_then(|v| v.parse::<f64>().ok())
         .unwrap_or(1.2);
 
-    let buffered_fees_lamports =
-        ((total_fees_lamports as f64 * fee_buffer_multiplier) as u64);
+    let buffered_fees_lamports = ((total_fees_lamports as f64 * fee_buffer_multiplier) as u64);
 
     let net_profit_lamports = expected_profit_lamports.saturating_sub(buffered_fees_lamports);
 
