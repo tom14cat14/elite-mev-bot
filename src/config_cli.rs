@@ -1,10 +1,8 @@
+use crate::dynamic_config_manager::{DynamicConfigManager, DynamicMevConfig};
 use anyhow::Result;
 use serde_json;
 use std::io::{self, Write};
-use crate::dynamic_config_manager::{
-    DynamicConfigManager, DynamicMevConfig
-};
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
 
 /// Command-line interface for dynamic configuration management
 pub struct ConfigCLI {
@@ -98,7 +96,8 @@ impl ConfigCLI {
             }
             "performance" => {
                 if parts.len() >= 3 {
-                    self.update_performance_parameter(parts[1], parts[2]).await?;
+                    self.update_performance_parameter(parts[1], parts[2])
+                        .await?;
                 } else {
                     warn!("Usage: performance <parameter> <value>");
                 }
@@ -124,7 +123,10 @@ impl ConfigCLI {
                 return Ok(false);
             }
             _ => {
-                warn!("Unknown command: {}. Type 'help' for available commands.", parts[0]);
+                warn!(
+                    "Unknown command: {}. Type 'help' for available commands.",
+                    parts[0]
+                );
             }
         }
 
@@ -170,10 +172,30 @@ impl ConfigCLI {
         println!("\n📊 MEV Bot Status:");
         println!("  Version: {}", config.version);
         println!("  Last Updated: {}", config.last_updated);
-        println!("  Emergency Stop: {}", if config.risk_management.emergency_stop { "🚨 ACTIVE" } else { "✅ Normal" });
-        println!("  Paper Trading: {}", if config.risk_management.enable_paper_trading { "📝 Enabled" } else { "💰 Live Trading" });
-        println!("  Position Size: {} SOL", config.risk_management.max_position_size_sol);
-        println!("  Target Latency: {} ms", config.performance_tuning.target_latency_ms);
+        println!(
+            "  Emergency Stop: {}",
+            if config.risk_management.emergency_stop {
+                "🚨 ACTIVE"
+            } else {
+                "✅ Normal"
+            }
+        );
+        println!(
+            "  Paper Trading: {}",
+            if config.risk_management.enable_paper_trading {
+                "📝 Enabled"
+            } else {
+                "💰 Live Trading"
+            }
+        );
+        println!(
+            "  Position Size: {} SOL",
+            config.risk_management.max_position_size_sol
+        );
+        println!(
+            "  Target Latency: {} ms",
+            config.performance_tuning.target_latency_ms
+        );
         println!();
         Ok(())
     }
@@ -213,7 +235,10 @@ impl ConfigCLI {
         config.last_updated = chrono::Utc::now().to_rfc3339();
 
         self.update_config(config).await?;
-        info!("📝 Paper trading {}", if enable { "enabled" } else { "disabled" });
+        info!(
+            "📝 Paper trading {}",
+            if enable { "enabled" } else { "disabled" }
+        );
         Ok(())
     }
 
@@ -245,7 +270,9 @@ impl ConfigCLI {
             "quality_threshold" => {
                 let val: f64 = value.parse()?;
                 if val < 0.0 || val > 10.0 {
-                    return Err(anyhow::anyhow!("Quality threshold must be between 0 and 10"));
+                    return Err(anyhow::anyhow!(
+                        "Quality threshold must be between 0 and 10"
+                    ));
                 }
                 config.risk_management.quality_threshold = val;
                 info!("⭐ Quality threshold updated to {}", val);

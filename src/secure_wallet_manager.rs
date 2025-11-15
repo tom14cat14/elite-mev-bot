@@ -1,21 +1,21 @@
+use aes_gcm::{
+    aead::{Aead, AeadCore, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce,
+};
 use anyhow::Result;
+use pbkdf2::pbkdf2_hmac;
 use serde::{Deserialize, Serialize};
+use sha2::Sha256;
+use solana_sdk::{
+    pubkey::Pubkey,
+    signature::{Keypair, Signer},
+    transaction::Transaction,
+};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use solana_sdk::{
-    signature::{Keypair, Signer},
-    pubkey::Pubkey,
-    transaction::Transaction,
-};
-use tracing::{info, warn, error, debug};
-use aes_gcm::{
-    aead::{Aead, KeyInit, OsRng, AeadCore},
-    Aes256Gcm, Nonce, Key,
-};
-use pbkdf2::{pbkdf2_hmac};
-use sha2::Sha256;
+use tracing::{debug, error, info, warn};
 
 /// Secure wallet management with encryption and KMS integration
 #[derive(Debug)]
@@ -33,7 +33,7 @@ pub struct EncryptedWallet {
     pub public_key: Pubkey,
     pub encrypted_private_key: Vec<u8>,
     pub nonce: [u8; 12],
-    pub key_derivation_salt: [u8; 32],  // SECURITY FIX: Random salt per wallet
+    pub key_derivation_salt: [u8; 32], // SECURITY FIX: Random salt per wallet
     pub wallet_type: WalletType,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub last_used: Option<chrono::DateTime<chrono::Utc>>,
@@ -119,18 +119,16 @@ impl SecureWalletManager {
         // Perform security audit
         self.perform_security_audit().await?;
 
-        info!("✅ Secure wallet manager initialized with {} wallets",
-              self.security_metrics.total_wallets);
+        info!(
+            "✅ Secure wallet manager initialized with {} wallets",
+            self.security_metrics.total_wallets
+        );
 
         Ok(())
     }
 
     /// Create new wallet with specified type
-    pub async fn create_wallet(
-        &mut self,
-        name: String,
-        wallet_type: WalletType,
-    ) -> Result<Pubkey> {
+    pub async fn create_wallet(&mut self, name: String, wallet_type: WalletType) -> Result<Pubkey> {
         info!("🆕 Creating new wallet: {} ({:?})", name, wallet_type);
 
         // Generate new keypair
@@ -198,7 +196,8 @@ impl SecureWalletManager {
 
         let encrypted_wallet = {
             let wallets = self.wallets.read().await;
-            wallets.get(name)
+            wallets
+                .get(name)
                 .ok_or_else(|| anyhow::anyhow!("Wallet not found: {}", name))?
                 .clone()
         };
@@ -243,7 +242,10 @@ impl SecureWalletManager {
                 })
             }
             Err(e) => {
-                error!("Failed to sign transaction with wallet {}: {}", wallet_name, e);
+                error!(
+                    "Failed to sign transaction with wallet {}: {}",
+                    wallet_name, e
+                );
 
                 self.security_metrics.failed_authentication_attempts += 1;
 
@@ -262,7 +264,8 @@ impl SecureWalletManager {
     pub async fn list_wallets(&self) -> Vec<WalletInfo> {
         let wallets = self.wallets.read().await;
 
-        wallets.values()
+        wallets
+            .values()
             .map(|w| WalletInfo {
                 name: w.name.clone(),
                 public_key: w.public_key,
@@ -289,7 +292,8 @@ impl SecureWalletManager {
 
         // Update metrics
         self.security_metrics.total_wallets = self.security_metrics.total_wallets.saturating_sub(1);
-        self.security_metrics.active_wallets = self.security_metrics.active_wallets.saturating_sub(1);
+        self.security_metrics.active_wallets =
+            self.security_metrics.active_wallets.saturating_sub(1);
 
         info!("✅ Wallet removed: {}", name);
 
@@ -308,7 +312,8 @@ impl SecureWalletManager {
         let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&backup_key));
         let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
 
-        let encrypted_backup = cipher.encrypt(&nonce, backup_data.as_bytes())
+        let encrypted_backup = cipher
+            .encrypt(&nonce, backup_data.as_bytes())
             .map_err(|e| anyhow::anyhow!("Encryption failed: {:?}", e))?;
 
         // Save encrypted backup
@@ -322,13 +327,21 @@ impl SecureWalletManager {
         let backup_json = serde_json::to_string_pretty(&backup_file)?;
         tokio::fs::write(backup_path, backup_json).await?;
 
-        info!("✅ Wallet backup created: {} ({} wallets)", backup_path, wallets.len());
+        info!(
+            "✅ Wallet backup created: {} ({} wallets)",
+            backup_path,
+            wallets.len()
+        );
 
         Ok(())
     }
 
     /// Restore wallets from encrypted backup
-    pub async fn restore_wallets(&mut self, backup_path: &str, backup_password: &str) -> Result<()> {
+    pub async fn restore_wallets(
+        &mut self,
+        backup_path: &str,
+        backup_password: &str,
+    ) -> Result<()> {
         info!("📥 Restoring wallets from backup: {}", backup_path);
 
         let backup_content = tokio::fs::read_to_string(backup_path).await?;
@@ -339,10 +352,12 @@ impl SecureWalletManager {
         let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&backup_key));
         let nonce = Nonce::from_slice(&backup_file.nonce);
 
-        let decrypted_data = cipher.decrypt(nonce, backup_file.data.as_slice())
+        let decrypted_data = cipher
+            .decrypt(nonce, backup_file.data.as_slice())
             .map_err(|e| anyhow::anyhow!("Decryption failed: {:?}", e))?;
         let wallets_data = String::from_utf8(decrypted_data)?;
-        let restored_wallets: HashMap<String, EncryptedWallet> = serde_json::from_str(&wallets_data)?;
+        let restored_wallets: HashMap<String, EncryptedWallet> =
+            serde_json::from_str(&wallets_data)?;
 
         // Merge with existing wallets
         {
@@ -354,7 +369,10 @@ impl SecureWalletManager {
 
         self.save_wallets().await?;
 
-        info!("✅ Wallets restored from backup: {} wallets", backup_file.wallet_count);
+        info!(
+            "✅ Wallets restored from backup: {} wallets",
+            backup_file.wallet_count
+        );
 
         Ok(())
     }
@@ -379,7 +397,10 @@ impl SecureWalletManager {
 
         // Analyze wallet distribution
         for wallet in wallets.values() {
-            *audit.wallet_types.entry(format!("{:?}", wallet.wallet_type)).or_insert(0) += 1;
+            *audit
+                .wallet_types
+                .entry(format!("{:?}", wallet.wallet_type))
+                .or_insert(0) += 1;
 
             // Check for security issues
             if wallet.usage_count == 0 {
@@ -387,26 +408,39 @@ impl SecureWalletManager {
             }
 
             if let Some(last_used) = wallet.last_used {
-                let days_since_use = chrono::Utc::now().signed_duration_since(last_used).num_days();
+                let days_since_use = chrono::Utc::now()
+                    .signed_duration_since(last_used)
+                    .num_days();
                 if days_since_use > 90 {
-                    audit.issues.push(format!("Wallet {} not used for {} days", wallet.name, days_since_use));
+                    audit.issues.push(format!(
+                        "Wallet {} not used for {} days",
+                        wallet.name, days_since_use
+                    ));
                 }
             }
         }
 
         // Generate recommendations
         if audit.total_wallets > 10 {
-            audit.recommendations.push("Consider consolidating unused wallets".to_string());
+            audit
+                .recommendations
+                .push("Consider consolidating unused wallets".to_string());
         }
 
         if self.security_metrics.failed_authentication_attempts > 0 {
-            audit.recommendations.push("Review failed authentication attempts".to_string());
+            audit
+                .recommendations
+                .push("Review failed authentication attempts".to_string());
         }
 
         self.security_metrics.last_security_audit = Some(audit.audit_time);
 
-        info!("📊 Security audit complete: {} wallets, {} issues, {} recommendations",
-              audit.total_wallets, audit.issues.len(), audit.recommendations.len());
+        info!(
+            "📊 Security audit complete: {} wallets, {} issues, {} recommendations",
+            audit.total_wallets,
+            audit.issues.len(),
+            audit.recommendations.len()
+        );
 
         Ok(audit)
     }
@@ -422,7 +456,8 @@ impl SecureWalletManager {
         let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
 
         let private_key_bytes = keypair.to_bytes();
-        let encrypted_private_key = cipher.encrypt(&nonce, private_key_bytes.as_slice())
+        let encrypted_private_key = cipher
+            .encrypt(&nonce, private_key_bytes.as_slice())
             .map_err(|e| anyhow::anyhow!("Private key encryption failed: {:?}", e))?;
 
         // SECURITY FIX: Generate unique random salt for this wallet
@@ -433,7 +468,7 @@ impl SecureWalletManager {
             public_key: keypair.pubkey(),
             encrypted_private_key,
             nonce: nonce.as_slice().try_into()?,
-            key_derivation_salt,  // SECURITY FIX: Store random salt with wallet
+            key_derivation_salt, // SECURITY FIX: Store random salt with wallet
             wallet_type,
             created_at: chrono::Utc::now(),
             last_used: None,
@@ -447,7 +482,8 @@ impl SecureWalletManager {
         let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&self.master_key));
         let nonce = Nonce::from_slice(&encrypted_wallet.nonce);
 
-        let decrypted_bytes = cipher.decrypt(nonce, encrypted_wallet.encrypted_private_key.as_slice())
+        let decrypted_bytes = cipher
+            .decrypt(nonce, encrypted_wallet.encrypted_private_key.as_slice())
             .map_err(|e| anyhow::anyhow!("Keypair decryption failed: {:?}", e))?;
         let keypair = Keypair::from_bytes(&decrypted_bytes)?;
 
@@ -491,7 +527,8 @@ impl SecureWalletManager {
     async fn load_wallets(&mut self) -> Result<()> {
         match tokio::fs::read_to_string(&self.wallet_storage_path).await {
             Ok(content) => {
-                let loaded_wallets: HashMap<String, EncryptedWallet> = serde_json::from_str(&content)?;
+                let loaded_wallets: HashMap<String, EncryptedWallet> =
+                    serde_json::from_str(&content)?;
 
                 {
                     let mut wallets = self.wallets.write().await;

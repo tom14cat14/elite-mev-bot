@@ -1,18 +1,15 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use solana_sdk::{
-    instruction::Instruction,
-    signature::Signer,
-};
+use solana_sdk::{instruction::Instruction, signature::Signer};
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
-use tracing::{debug, info, error};
+use tracing::{debug, error, info};
 
-use crate::dex_registry::{DexRegistry, DexInfo};
+use crate::dex_registry::{DexInfo, DexRegistry};
 use crate::dynamic_fee_model::DynamicFeeModel;
-use crate::jupiter_executor::JupiterExecutor;
 use crate::jito_bundle_manager::JitoBundleManager;
+use crate::jupiter_executor::JupiterExecutor;
 use crate::wallet_manager::WalletManager;
 
 /// High-performance arbitrage engine for cross-DEX price differences
@@ -112,7 +109,13 @@ impl ArbitrageEngine {
     }
 
     /// Update price data from market feeds (called continuously)
-    pub fn update_price_data(&mut self, token_mint: &str, dex_name: &str, price: f64, liquidity: u64) {
+    pub fn update_price_data(
+        &mut self,
+        token_mint: &str,
+        dex_name: &str,
+        price: f64,
+        liquidity: u64,
+    ) {
         let price_entry = TokenPrice {
             price,
             liquidity,
@@ -126,7 +129,10 @@ impl ArbitrageEngine {
         self.stats.price_updates_processed += 1;
 
         // Note: Arbitrage scanning would happen asynchronously in production
-        debug!("Price updated for {}: {} on {}", token_mint, price, dex_name);
+        debug!(
+            "Price updated for {}: {} on {}",
+            token_mint, price, dex_name
+        );
     }
 
     /// Scan for arbitrage opportunities for a specific token
@@ -135,7 +141,8 @@ impl ArbitrageEngine {
         let mut opportunities = Vec::new();
 
         // Get all prices for this token across DEXs
-        let token_prices: HashMap<String, &TokenPrice> = self.price_cache
+        let token_prices: HashMap<String, &TokenPrice> = self
+            .price_cache
             .iter()
             .filter(|(key, _)| key.starts_with(token_mint))
             .map(|(key, price)| (key.split(':').nth(1).unwrap().to_string(), price))
@@ -147,30 +154,35 @@ impl ArbitrageEngine {
 
         // Check all DEX pairs for arbitrage opportunities
         for (dex1, dex2) in arbitrage_pairs {
-            if let (Some(price1), Some(price2)) = (
-                token_prices.get(&dex1.name),
-                token_prices.get(&dex2.name)
-            ) {
+            if let (Some(price1), Some(price2)) =
+                (token_prices.get(&dex1.name), token_prices.get(&dex2.name))
+            {
                 // Calculate price difference
-                let price_diff_percent = ((price2.price - price1.price) / price1.price).abs() * 100.0;
+                let price_diff_percent =
+                    ((price2.price - price1.price) / price1.price).abs() * 100.0;
 
                 // Check if price difference is significant enough
-                if price_diff_percent > 0.5 { // 0.5% minimum spread
-                    let (buy_dex, sell_dex, buy_price, sell_price) = if price1.price < price2.price {
+                if price_diff_percent > 0.5 {
+                    // 0.5% minimum spread
+                    let (buy_dex, sell_dex, buy_price, sell_price) = if price1.price < price2.price
+                    {
                         (dex1, dex2, price1.price, price2.price)
                     } else {
                         (dex2, dex1, price2.price, price1.price)
                     };
 
                     // Calculate optimal trade size and profit
-                    if let Ok(opportunity) = self.calculate_arbitrage_opportunity(
-                        token_mint,
-                        buy_dex,
-                        sell_dex,
-                        buy_price,
-                        sell_price,
-                        price_diff_percent,
-                    ).await {
+                    if let Ok(opportunity) = self
+                        .calculate_arbitrage_opportunity(
+                            token_mint,
+                            buy_dex,
+                            sell_dex,
+                            buy_price,
+                            sell_price,
+                            price_diff_percent,
+                        )
+                        .await
+                    {
                         if opportunity.estimated_profit_sol >= self.min_profit_sol {
                             opportunities.push(opportunity);
                         }
@@ -180,21 +192,28 @@ impl ArbitrageEngine {
         }
 
         // Execute the most profitable opportunity
-        if let Some(best_opportunity) = opportunities.into_iter()
-            .max_by(|a, b| a.estimated_profit_sol.partial_cmp(&b.estimated_profit_sol).unwrap()) {
-
+        if let Some(best_opportunity) = opportunities.into_iter().max_by(|a, b| {
+            a.estimated_profit_sol
+                .partial_cmp(&b.estimated_profit_sol)
+                .unwrap()
+        }) {
             self.stats.opportunities_detected += 1;
-            info!("💰 Arbitrage opportunity detected: {:.4} SOL profit ({:.2}% spread) - {} -> {}",
-                  best_opportunity.estimated_profit_sol,
-                  best_opportunity.price_difference_percent,
-                  best_opportunity.buy_dex.name,
-                  best_opportunity.sell_dex.name);
+            info!(
+                "💰 Arbitrage opportunity detected: {:.4} SOL profit ({:.2}% spread) - {} -> {}",
+                best_opportunity.estimated_profit_sol,
+                best_opportunity.price_difference_percent,
+                best_opportunity.buy_dex.name,
+                best_opportunity.sell_dex.name
+            );
 
             // Execute immediately for time-sensitive arbitrage
             tokio::spawn(async move {
                 // Would execute the opportunity here
                 // For now, just log it
-                debug!("Would execute arbitrage opportunity: {}", best_opportunity.opportunity_id);
+                debug!(
+                    "Would execute arbitrage opportunity: {}",
+                    best_opportunity.opportunity_id
+                );
             });
         }
 
@@ -254,7 +273,11 @@ impl ArbitrageEngine {
             price_difference_percent: price_diff_percent,
             optimal_amount,
             estimated_profit_sol: fee_calculation.net_profit_sol,
-            confidence_score: self.calculate_arbitrage_confidence(buy_dex, sell_dex, price_diff_percent),
+            confidence_score: self.calculate_arbitrage_confidence(
+                buy_dex,
+                sell_dex,
+                price_diff_percent,
+            ),
             execution_priority: self.calculate_execution_priority(fee_calculation.net_profit_sol),
             detected_at: now,
             expires_at: now + chrono::Duration::milliseconds(2000), // 2 second window
@@ -270,40 +293,57 @@ impl ArbitrageEngine {
         let start_time = Instant::now();
         let opportunity_id = opportunity.opportunity_id.clone();
 
-        info!("💸 Executing arbitrage: {} -> {} ({:.2}% spread)",
-              opportunity.buy_dex.name, opportunity.sell_dex.name, opportunity.price_difference_percent);
+        info!(
+            "💸 Executing arbitrage: {} -> {} ({:.2}% spread)",
+            opportunity.buy_dex.name,
+            opportunity.sell_dex.name,
+            opportunity.price_difference_percent
+        );
 
         // Build buy instructions (on cheaper DEX)
-        let buy_instructions = self.build_arbitrage_instructions(
-            &opportunity.token_pair.base_mint,
-            &opportunity.token_pair.quote_mint,
-            opportunity.optimal_amount,
-            &opportunity.buy_dex.name,
-            true, // is_buy
-        ).await?;
+        let buy_instructions = self
+            .build_arbitrage_instructions(
+                &opportunity.token_pair.base_mint,
+                &opportunity.token_pair.quote_mint,
+                opportunity.optimal_amount,
+                &opportunity.buy_dex.name,
+                true, // is_buy
+            )
+            .await?;
 
         // Build sell instructions (on more expensive DEX)
-        let sell_instructions = self.build_arbitrage_instructions(
-            &opportunity.token_pair.base_mint,
-            &opportunity.token_pair.quote_mint,
-            opportunity.optimal_amount,
-            &opportunity.sell_dex.name,
-            false, // is_sell
-        ).await?;
+        let sell_instructions = self
+            .build_arbitrage_instructions(
+                &opportunity.token_pair.base_mint,
+                &opportunity.token_pair.quote_mint,
+                opportunity.optimal_amount,
+                &opportunity.sell_dex.name,
+                false, // is_sell
+            )
+            .await?;
 
         // Create atomic arbitrage bundle
-        let bundle = self.bundle_manager.create_arbitrage_bundle(
-            buy_instructions,
-            sell_instructions,
-            self.wallet_manager.get_main_keypair(),
-            recent_blockhash,
-            opportunity.buy_dex.name.clone(),
-            opportunity.sell_dex.name.clone(),
-            (opportunity.token_pair.base_symbol.clone(), opportunity.token_pair.quote_symbol.clone()),
-        ).await?;
+        let bundle = self
+            .bundle_manager
+            .create_arbitrage_bundle(
+                buy_instructions,
+                sell_instructions,
+                self.wallet_manager.get_main_keypair(),
+                recent_blockhash,
+                opportunity.buy_dex.name.clone(),
+                opportunity.sell_dex.name.clone(),
+                (
+                    opportunity.token_pair.base_symbol.clone(),
+                    opportunity.token_pair.quote_symbol.clone(),
+                ),
+            )
+            .await?;
 
-        info!("📦 Arbitrage bundle created in {}ms: {}",
-              start_time.elapsed().as_millis(), bundle.bundle_id);
+        info!(
+            "📦 Arbitrage bundle created in {}ms: {}",
+            start_time.elapsed().as_millis(),
+            bundle.bundle_id
+        );
 
         // Submit bundle to Jito
         match self.bundle_manager.submit_bundle(&bundle).await {
@@ -315,11 +355,15 @@ impl ArbitrageEngine {
 
                 // Update average execution time
                 let total_executions = self.stats.opportunities_executed as f64;
-                self.stats.average_execution_time_ms =
-                    (self.stats.average_execution_time_ms * (total_executions - 1.0) + execution_time as f64) / total_executions;
+                self.stats.average_execution_time_ms = (self.stats.average_execution_time_ms
+                    * (total_executions - 1.0)
+                    + execution_time as f64)
+                    / total_executions;
 
-                info!("✅ Arbitrage executed successfully in {}ms: {} -> Jito: {}",
-                      execution_time, opportunity_id, jito_bundle_id);
+                info!(
+                    "✅ Arbitrage executed successfully in {}ms: {} -> Jito: {}",
+                    execution_time, opportunity_id, jito_bundle_id
+                );
 
                 Ok(ArbitrageExecution {
                     opportunity_id,
@@ -337,8 +381,10 @@ impl ArbitrageEngine {
                 let execution_time = start_time.elapsed().as_millis() as u64;
                 self.stats.failed_executions += 1;
 
-                error!("❌ Arbitrage execution failed in {}ms: {} - {}",
-                       execution_time, opportunity_id, e);
+                error!(
+                    "❌ Arbitrage execution failed in {}ms: {} - {}",
+                    execution_time, opportunity_id, e
+                );
 
                 Ok(ArbitrageExecution {
                     opportunity_id,
@@ -366,7 +412,12 @@ impl ArbitrageEngine {
     }
 
     /// Calculate total fees for arbitrage trade
-    fn calculate_arbitrage_fees(&self, amount: u64, buy_dex: &DexInfo, sell_dex: &DexInfo) -> Result<f64> {
+    fn calculate_arbitrage_fees(
+        &self,
+        amount: u64,
+        buy_dex: &DexInfo,
+        sell_dex: &DexInfo,
+    ) -> Result<f64> {
         let amount_sol = amount as f64 / 1_000_000_000.0;
         let buy_fee = amount_sol * buy_dex.fee_rate;
         let sell_fee = amount_sol * sell_dex.fee_rate;
@@ -379,15 +430,25 @@ impl ArbitrageEngine {
     }
 
     /// Calculate confidence score for arbitrage opportunity
-    fn calculate_arbitrage_confidence(&self, buy_dex: &DexInfo, sell_dex: &DexInfo, price_diff: f64) -> f64 {
+    fn calculate_arbitrage_confidence(
+        &self,
+        buy_dex: &DexInfo,
+        sell_dex: &DexInfo,
+        price_diff: f64,
+    ) -> f64 {
         let mut score: f64 = 0.7; // Base confidence
 
         // Higher confidence for larger price differences
-        if price_diff > 2.0 { score += 0.2; }
-        else if price_diff > 1.0 { score += 0.1; }
+        if price_diff > 2.0 {
+            score += 0.2;
+        } else if price_diff > 1.0 {
+            score += 0.1;
+        }
 
         // Higher confidence for high-liquidity DEXs
-        if buy_dex.min_liquidity_threshold > 1_000_000 && sell_dex.min_liquidity_threshold > 1_000_000 {
+        if buy_dex.min_liquidity_threshold > 1_000_000
+            && sell_dex.min_liquidity_threshold > 1_000_000
+        {
             score += 0.1;
         }
 
@@ -420,23 +481,20 @@ impl ArbitrageEngine {
         _is_buy: bool,
     ) -> Result<Vec<Instruction>> {
         // Check cache for route data
-        if let Some(_cached_route) = self.jupiter_executor.get_route_from_cache(
-            input_mint,
-            output_mint,
-            amount,
-        ) {
+        if let Some(_cached_route) =
+            self.jupiter_executor
+                .get_route_from_cache(input_mint, output_mint, amount)
+        {
             debug!("Using cached route for arbitrage instruction: {}", dex_name);
         }
 
         // For now, return simplified instruction
         // In production, this would build real DEX-specific swap instructions
-        Ok(vec![
-            solana_sdk::system_instruction::transfer(
-                &self.wallet_manager.get_main_keypair().pubkey(),
-                &self.wallet_manager.get_main_keypair().pubkey(),
-                amount,
-            ),
-        ])
+        Ok(vec![solana_sdk::system_instruction::transfer(
+            &self.wallet_manager.get_main_keypair().pubkey(),
+            &self.wallet_manager.get_main_keypair().pubkey(),
+            amount,
+        )])
     }
 
     /// Detect arbitrage opportunities across DEXs (real-time scanning)
@@ -463,7 +521,10 @@ impl ArbitrageEngine {
     }
 
     /// Find cross-DEX arbitrage opportunity for a specific token
-    async fn find_cross_dex_arbitrage(&self, token_mint: &str) -> Result<Option<ArbitrageOpportunity>> {
+    async fn find_cross_dex_arbitrage(
+        &self,
+        token_mint: &str,
+    ) -> Result<Option<ArbitrageOpportunity>> {
         let mut prices = Vec::new();
 
         // Collect all prices for this token across DEXs
@@ -478,12 +539,14 @@ impl ArbitrageEngine {
         }
 
         // Find best buy and sell prices
-        let (min_dex_name, min_price) = prices.iter()
+        let (min_dex_name, min_price) = prices
+            .iter()
             .min_by(|a, b| a.1.price.partial_cmp(&b.1.price).unwrap())
             .map(|(dex, price)| (dex.clone(), price.clone()))
             .unwrap();
 
-        let (max_dex_name, max_price) = prices.iter()
+        let (max_dex_name, max_price) = prices
+            .iter()
             .max_by(|a, b| a.1.price.partial_cmp(&b.1.price).unwrap())
             .map(|(dex, price)| (dex.clone(), price.clone()))
             .unwrap();
@@ -493,9 +556,13 @@ impl ArbitrageEngine {
         }
 
         // Get DexInfo objects for the DEXs
-        let min_dex = self.dex_registry.get_dex_by_name(&min_dex_name)
+        let min_dex = self
+            .dex_registry
+            .get_dex_by_name(&min_dex_name)
             .ok_or_else(|| anyhow::anyhow!("DEX not found: {}", min_dex_name))?;
-        let max_dex = self.dex_registry.get_dex_by_name(&max_dex_name)
+        let max_dex = self
+            .dex_registry
+            .get_dex_by_name(&max_dex_name)
             .ok_or_else(|| anyhow::anyhow!("DEX not found: {}", max_dex_name))?;
 
         // Calculate potential profit
@@ -503,9 +570,10 @@ impl ArbitrageEngine {
         let percentage_diff = (price_diff / min_price.price) * 100.0;
 
         // Check if opportunity is profitable (>0.1% spread + fees)
-        if percentage_diff > 0.2 { // 0.2% minimum for profitability after fees
+        if percentage_diff > 0.2 {
+            // 0.2% minimum for profitability after fees
             let estimated_amount = (self.max_position_size_sol / min_price.price).min(
-                min_price.liquidity as f64 / 4.0 // Use max 25% of liquidity
+                min_price.liquidity as f64 / 4.0, // Use max 25% of liquidity
             );
             let estimated_profit = price_diff * estimated_amount * 0.95; // 95% efficiency
 
@@ -546,7 +614,8 @@ impl ArbitrageEngine {
         if self.stats.opportunities_detected == 0 {
             0.0
         } else {
-            (self.stats.opportunities_executed as f64 / self.stats.opportunities_detected as f64) * 100.0
+            (self.stats.opportunities_executed as f64 / self.stats.opportunities_detected as f64)
+                * 100.0
         }
     }
 
@@ -558,6 +627,7 @@ impl ArbitrageEngine {
     /// Clean up old price data
     pub fn cleanup_old_prices(&mut self) {
         let cutoff = Utc::now() - chrono::Duration::seconds(30); // Remove prices older than 30s
-        self.price_cache.retain(|_, price| price.last_updated > cutoff);
+        self.price_cache
+            .retain(|_, price| price.last_updated > cutoff);
     }
 }

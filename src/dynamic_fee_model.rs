@@ -5,7 +5,7 @@ use tracing::{debug, info};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DynamicFeeModel {
     pub profit_tiers: Vec<ProfitTier>,
-    pub base_multiplier: f64, // 1.2x minimum profit
+    pub base_multiplier: f64,        // 1.2x minimum profit
     pub default_gas_percentage: f64, // 10% of profit for gas/tip
 }
 
@@ -34,7 +34,7 @@ pub struct FeeCalculation {
 impl DynamicFeeModel {
     pub fn new() -> Self {
         Self {
-            base_multiplier: 1.2, // Minimum 1.2x profit
+            base_multiplier: 1.2,         // Minimum 1.2x profit
             default_gas_percentage: 0.10, // 10% of profit for gas/tip
             profit_tiers: vec![
                 // Small profits: 0.5-1 SOL
@@ -43,7 +43,7 @@ impl DynamicFeeModel {
                     max_profit_sol: Some(1.0),
                     profit_multiplier: 1.2,
                     gas_percentage: 0.08, // 8% for smaller profits
-                    max_tip_sol: 0.05, // Max 0.05 SOL tip
+                    max_tip_sol: 0.05,    // Max 0.05 SOL tip
                     priority_boost: 3,
                 },
                 // Medium profits: 1-3 SOL
@@ -52,7 +52,7 @@ impl DynamicFeeModel {
                     max_profit_sol: Some(3.0),
                     profit_multiplier: 1.15,
                     gas_percentage: 0.10, // 10% standard
-                    max_tip_sol: 0.15, // Max 0.15 SOL tip
+                    max_tip_sol: 0.15,    // Max 0.15 SOL tip
                     priority_boost: 5,
                 },
                 // Large profits: 3+ SOL
@@ -60,8 +60,8 @@ impl DynamicFeeModel {
                     min_profit_sol: 3.0,
                     max_profit_sol: None,
                     profit_multiplier: 1.1, // More aggressive on large profits
-                    gas_percentage: 0.12, // 12% for priority
-                    max_tip_sol: 0.5, // Max 0.5 SOL tip
+                    gas_percentage: 0.12,   // 12% for priority
+                    max_tip_sol: 0.5,       // Max 0.5 SOL tip
                     priority_boost: 8,
                 },
             ],
@@ -76,8 +76,11 @@ impl DynamicFeeModel {
     ) -> Result<FeeCalculation> {
         let tier = self.get_profit_tier(estimated_profit_sol);
 
-        debug!("Calculating fees for {:.4} SOL profit using tier: {}",
-               estimated_profit_sol, tier.tier_name());
+        debug!(
+            "Calculating fees for {:.4} SOL profit using tier: {}",
+            estimated_profit_sol,
+            tier.tier_name()
+        );
 
         // Calculate gas/tip based on tier
         let raw_gas_tip = estimated_profit_sol * tier.gas_percentage;
@@ -105,12 +108,17 @@ impl DynamicFeeModel {
         };
 
         if should_execute {
-            info!("✅ Profitable trade: {:.4} SOL gross → {:.4} SOL net ({}x after fees)",
-                  calculation.gross_profit_sol, calculation.net_profit_sol,
-                  net_profit_sol / total_fees_sol);
+            info!(
+                "✅ Profitable trade: {:.4} SOL gross → {:.4} SOL net ({}x after fees)",
+                calculation.gross_profit_sol,
+                calculation.net_profit_sol,
+                net_profit_sol / total_fees_sol
+            );
         } else {
-            debug!("❌ Below threshold: {:.4} SOL net < {:.4} SOL required ({}x)",
-                   net_profit_sol, required_min_profit, tier.profit_multiplier);
+            debug!(
+                "❌ Below threshold: {:.4} SOL net < {:.4} SOL required ({}x)",
+                net_profit_sol, required_min_profit, tier.profit_multiplier
+            );
         }
 
         Ok(calculation)
@@ -140,7 +148,7 @@ impl DynamicFeeModel {
         &self,
         profit_sol: f64,
         current_network_congestion: f64, // 0.0 - 1.0
-        competition_level: u8, // 1-10
+        competition_level: u8,           // 1-10
     ) -> f64 {
         let tier = self.get_profit_tier(profit_sol);
         let base_tip = profit_sol * tier.gas_percentage;

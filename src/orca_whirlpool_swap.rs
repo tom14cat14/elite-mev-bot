@@ -3,19 +3,20 @@
 //! Builds swap instructions for Orca Whirlpool pools to enable sandwich attacks.
 //! Reference: https://github.com/orca-so/whirlpools
 
+use crate::orca_whirlpool_state::OrcaWhirlpoolState;
 use anyhow::{anyhow, Result};
 use solana_sdk::{
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
 };
 use std::str::FromStr;
-use crate::orca_whirlpool_state::OrcaWhirlpoolState;
 
 /// Orca Whirlpools program ID
 pub const ORCA_WHIRLPOOLS_PROGRAM_ID: &str = "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc";
 
 /// Orca Whirlpools swap instruction discriminator (Anchor: sha256("global:swap")[:8])
-pub const SWAP_INSTRUCTION_DISCRIMINATOR: [u8; 8] = [0xf8, 0xc6, 0x9e, 0x91, 0xe1, 0x75, 0x87, 0xc8];
+pub const SWAP_INSTRUCTION_DISCRIMINATOR: [u8; 8] =
+    [0xf8, 0xc6, 0x9e, 0x91, 0xe1, 0x75, 0x87, 0xc8];
 
 /// Build an Orca Whirlpool swap instruction
 ///
@@ -77,10 +78,7 @@ pub fn build_orca_whirlpool_swap_instruction(
     let token_program = spl_token::id();
 
     // Derive token authority PDA (standard Orca pattern)
-    let (token_authority, _bump) = Pubkey::find_program_address(
-        &[b"vault"],
-        &program_id,
-    );
+    let (token_authority, _bump) = Pubkey::find_program_address(&[b"vault"], &program_id);
 
     // Determine which user account is A and which is B based on swap direction
     let (user_account_a, user_account_b) = if a_to_b {

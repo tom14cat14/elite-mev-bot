@@ -1,19 +1,19 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use solana_client::rpc_client::RpcClient;
 use solana_sdk::{
     instruction::Instruction,
     message::Message,
-    signature::{Signer, Signature},
+    signature::{Signature, Signer},
     transaction::Transaction,
 };
-use solana_client::rpc_client::RpcClient;
 use solana_transaction_status::{
     EncodedTransaction, TransactionBinaryEncoding, UiTransactionEncoding,
 };
 use std::str::FromStr;
 use std::time::{Duration, Instant};
-use tracing::{debug, info, warn, error};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 /// High-performance atomic bundle manager for Jito MEV execution
@@ -108,22 +108,24 @@ impl JitoBundleManager {
             .map_err(|e| anyhow::anyhow!("Invalid signature: {}", e))?;
 
         // Fetch full transaction from RPC
-        let tx_data = self.rpc_client
+        let tx_data = self
+            .rpc_client
             .get_transaction(&sig, UiTransactionEncoding::Base58)
             .map_err(|e| anyhow::anyhow!("Failed to fetch victim transaction: {}", e))?;
 
         // Extract the encoded transaction
         let encoded_tx = match tx_data.transaction.transaction {
-            EncodedTransaction::Binary(data, encoding) => {
-                match encoding {
-                    TransactionBinaryEncoding::Base58 => data,
-                    _ => return Err(anyhow::anyhow!("Unexpected encoding: {:?}", encoding)),
-                }
+            EncodedTransaction::Binary(data, encoding) => match encoding {
+                TransactionBinaryEncoding::Base58 => data,
+                _ => return Err(anyhow::anyhow!("Unexpected encoding: {:?}", encoding)),
             },
             _ => return Err(anyhow::anyhow!("Unexpected transaction format")),
         };
 
-        debug!("✅ Victim transaction fetched successfully: {} bytes", encoded_tx.len());
+        debug!(
+            "✅ Victim transaction fetched successfully: {} bytes",
+            encoded_tx.len()
+        );
         Ok(encoded_tx)
     }
 
@@ -151,7 +153,9 @@ impl JitoBundleManager {
 
         // CRITICAL FIX: Fetch FULL victim transaction (not just signature)
         // This ensures JITO bundle atomicity: frontrun -> victim -> backrun
-        let victim_tx_full = self.fetch_victim_transaction(&victim_tx_signature).await
+        let victim_tx_full = self
+            .fetch_victim_transaction(&victim_tx_signature)
+            .await
             .map_err(|e| {
                 error!("❌ Failed to fetch victim transaction: {}", e);
                 e
@@ -186,11 +190,16 @@ impl JitoBundleManager {
         let creation_time = start_time.elapsed().as_millis();
         self.update_bundle_stats(creation_time);
 
-        debug!("🥪 Sandwich bundle created in {}ms (target: 58ms): {}",
-               creation_time, bundle.bundle_id);
+        debug!(
+            "🥪 Sandwich bundle created in {}ms (target: 58ms): {}",
+            creation_time, bundle.bundle_id
+        );
 
         if creation_time > 58 {
-            warn!("⚠️ Bundle creation took {}ms (above 58ms target)", creation_time);
+            warn!(
+                "⚠️ Bundle creation took {}ms (above 58ms target)",
+                creation_time
+            );
         }
 
         Ok(bundle)
@@ -247,8 +256,10 @@ impl JitoBundleManager {
         let creation_time = start_time.elapsed().as_millis();
         self.update_bundle_stats(creation_time);
 
-        debug!("💰 Arbitrage bundle created in {}ms: {} -> {} ({})",
-               creation_time, buy_dex, sell_dex, bundle.bundle_id);
+        debug!(
+            "💰 Arbitrage bundle created in {}ms: {} -> {} ({})",
+            creation_time, buy_dex, sell_dex, bundle.bundle_id
+        );
 
         Ok(bundle)
     }
@@ -292,8 +303,10 @@ impl JitoBundleManager {
         let creation_time = start_time.elapsed().as_millis();
         self.update_bundle_stats(creation_time);
 
-        debug!("💧 Liquidation bundle created in {}ms: {}",
-               creation_time, bundle.bundle_id);
+        debug!(
+            "💧 Liquidation bundle created in {}ms: {}",
+            creation_time, bundle.bundle_id
+        );
 
         Ok(bundle)
     }
@@ -301,7 +314,10 @@ impl JitoBundleManager {
     /// Simulate bundle transactions before submission (CRITICAL FIX - Issue #6)
     /// Prevents wasted JITO tips on invalid bundles
     async fn simulate_bundle(&self, bundle: &AtomicBundle) -> Result<()> {
-        debug!("🧪 Simulating bundle before submission: {}", bundle.bundle_id);
+        debug!(
+            "🧪 Simulating bundle before submission: {}",
+            bundle.bundle_id
+        );
 
         for (i, tx_b58) in bundle.transactions.iter().enumerate() {
             // Decode transaction from base58
@@ -314,21 +330,32 @@ impl JitoBundleManager {
                 .map_err(|e| anyhow::anyhow!("Failed to deserialize transaction {}: {}", i, e))?;
 
             // Simulate transaction via RPC
-            let simulation_result = self.rpc_client
+            let simulation_result = self
+                .rpc_client
                 .simulate_transaction(&tx)
                 .map_err(|e| anyhow::anyhow!("Failed to simulate transaction {}: {}", i, e))?;
 
             // Check for errors in simulation
             if let Some(err) = simulation_result.value.err {
                 error!("❌ Transaction {} simulation failed: {:?}", i, err);
-                error!("   Bundle {} will NOT be submitted (would waste JITO tip)", bundle.bundle_id);
-                return Err(anyhow::anyhow!("Transaction {} simulation failed: {:?}", i, err));
+                error!(
+                    "   Bundle {} will NOT be submitted (would waste JITO tip)",
+                    bundle.bundle_id
+                );
+                return Err(anyhow::anyhow!(
+                    "Transaction {} simulation failed: {:?}",
+                    i,
+                    err
+                ));
             }
 
             debug!("✅ Transaction {} simulation passed", i);
         }
 
-        info!("✅ All {} transactions simulated successfully", bundle.transactions.len());
+        info!(
+            "✅ All {} transactions simulated successfully",
+            bundle.transactions.len()
+        );
         Ok(())
     }
 
@@ -353,7 +380,8 @@ impl JitoBundleManager {
             }]
         });
 
-        let response = self.client
+        let response = self
+            .client
             .post(&format!("{}/api/v1/bundles", self.jito_endpoint))
             .header("Content-Type", "application/json")
             .json(&payload)
@@ -365,8 +393,10 @@ impl JitoBundleManager {
         if response.status().is_success() {
             let bundle_response: JitoBundleResponse = response.json().await?;
 
-            info!("✅ Bundle submitted successfully in {}ms: {} -> Jito ID: {}",
-                  submit_time, bundle.bundle_id, bundle_response.bundle_id);
+            info!(
+                "✅ Bundle submitted successfully in {}ms: {} -> Jito ID: {}",
+                submit_time, bundle.bundle_id, bundle_response.bundle_id
+            );
 
             self.bundle_stats.successful_submissions += 1;
             Ok(bundle_response.bundle_id)
@@ -375,7 +405,10 @@ impl JitoBundleManager {
             error!("❌ Bundle submission failed: {}", error_text);
 
             self.bundle_stats.failed_submissions += 1;
-            Err(anyhow::anyhow!("Jito bundle submission failed: {}", error_text))
+            Err(anyhow::anyhow!(
+                "Jito bundle submission failed: {}",
+                error_text
+            ))
         }
     }
 
@@ -388,13 +421,11 @@ impl JitoBundleManager {
         priority_fee: u64,
     ) -> Result<Transaction> {
         // Add priority fee instruction for MEV competitiveness
-        let mut all_instructions = vec![
-            solana_sdk::system_instruction::transfer(
-                &wallet_keypair.pubkey(),
-                &wallet_keypair.pubkey(),
-                priority_fee,
-            ),
-        ];
+        let mut all_instructions = vec![solana_sdk::system_instruction::transfer(
+            &wallet_keypair.pubkey(),
+            &wallet_keypair.pubkey(),
+            priority_fee,
+        )];
         all_instructions.extend(instructions);
 
         let message = Message::new(&all_instructions, Some(&wallet_keypair.pubkey()));
@@ -430,9 +461,12 @@ impl JitoBundleManager {
         BundlePerformanceReport {
             total_bundles: self.bundle_stats.total_bundles_created,
             success_rate: if self.bundle_stats.total_bundles_created > 0 {
-                (self.bundle_stats.successful_submissions as f64 /
-                 self.bundle_stats.total_bundles_created as f64) * 100.0
-            } else { 0.0 },
+                (self.bundle_stats.successful_submissions as f64
+                    / self.bundle_stats.total_bundles_created as f64)
+                    * 100.0
+            } else {
+                0.0
+            },
             average_creation_time_ms: self.bundle_stats.average_creation_time_ms,
             below_target_percentage: self.bundle_stats.below_target_percentage * 100.0,
             target_creation_time_ms: 58.0,

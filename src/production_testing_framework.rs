@@ -1,11 +1,11 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use solana_rpc_client::rpc_client::RpcClient;
+use solana_sdk::pubkey::Pubkey;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use tokio::time::timeout;
-use tracing::{info, warn, error, debug};
-use solana_sdk::pubkey::Pubkey;
-use solana_rpc_client::rpc_client::RpcClient;
+use tracing::{debug, error, info, warn};
 
 /// Comprehensive production testing framework for MEV bot validation
 #[derive(Debug)]
@@ -105,33 +105,39 @@ impl ProductionTestingFramework {
         let mut environments = HashMap::new();
 
         // Add devnet environment
-        environments.insert("devnet".to_string(), TestEnvironment {
-            name: "devnet".to_string(),
-            network: SolanaNetwork::Devnet,
-            rpc_endpoint: "https://api.devnet.solana.com".to_string(),
-            shredstream_endpoint: "wss://devnet.shredstream.com".to_string(),
-            test_wallet: Pubkey::default(), // Would be configured
-            test_tokens: vec![
-                TestToken {
+        environments.insert(
+            "devnet".to_string(),
+            TestEnvironment {
+                name: "devnet".to_string(),
+                network: SolanaNetwork::Devnet,
+                rpc_endpoint: "https://api.devnet.solana.com".to_string(),
+                shredstream_endpoint: "wss://devnet.shredstream.com".to_string(),
+                test_wallet: Pubkey::default(), // Would be configured
+                test_tokens: vec![TestToken {
                     symbol: "USDC-DEV".to_string(),
-                    mint: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU".parse().unwrap(),
+                    mint: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
+                        .parse()
+                        .unwrap(),
                     decimals: 6,
                     test_amount: 1_000_000, // 1 USDC
-                },
-            ],
-            enabled: true,
-        });
+                }],
+                enabled: true,
+            },
+        );
 
         // Add testnet environment
-        environments.insert("testnet".to_string(), TestEnvironment {
-            name: "testnet".to_string(),
-            network: SolanaNetwork::Testnet,
-            rpc_endpoint: "https://api.testnet.solana.com".to_string(),
-            shredstream_endpoint: "wss://testnet.shredstream.com".to_string(),
-            test_wallet: Pubkey::default(),
-            test_tokens: vec![],
-            enabled: false, // Testnet is deprecated
-        });
+        environments.insert(
+            "testnet".to_string(),
+            TestEnvironment {
+                name: "testnet".to_string(),
+                network: SolanaNetwork::Testnet,
+                rpc_endpoint: "https://api.testnet.solana.com".to_string(),
+                shredstream_endpoint: "wss://testnet.shredstream.com".to_string(),
+                test_wallet: Pubkey::default(),
+                test_tokens: vec![],
+                enabled: false, // Testnet is deprecated
+            },
+        );
 
         Self {
             test_environments: environments,
@@ -152,7 +158,10 @@ impl ProductionTestingFramework {
 
         for scenario in test_scenarios {
             if !self.is_environment_compatible(&scenario.required_environment) {
-                warn!("Skipping test {} - environment not available", scenario.name);
+                warn!(
+                    "Skipping test {} - environment not available",
+                    scenario.name
+                );
                 continue;
             }
 
@@ -161,15 +170,26 @@ impl ProductionTestingFramework {
             match timeout(
                 Duration::from_secs(scenario.estimated_duration_seconds * 2),
                 self.run_test_scenario(&scenario),
-            ).await {
+            )
+            .await
+            {
                 Ok(Ok(result)) => {
                     if result.success {
                         successful_tests += 1;
-                        info!("✅ Test passed: {} ({:.2}ms)", scenario.name, result.duration_ms);
+                        info!(
+                            "✅ Test passed: {} ({:.2}ms)",
+                            scenario.name, result.duration_ms
+                        );
                     } else {
                         failed_tests += 1;
-                        error!("❌ Test failed: {} - {}", scenario.name,
-                               result.error_message.clone().unwrap_or_else(|| "Unknown error".to_string()));
+                        error!(
+                            "❌ Test failed: {} - {}",
+                            scenario.name,
+                            result
+                                .error_message
+                                .clone()
+                                .unwrap_or_else(|| "Unknown error".to_string())
+                        );
                     }
                     self.test_results.push(result);
                 }
@@ -185,10 +205,16 @@ impl ProductionTestingFramework {
         }
 
         let suite_duration = suite_start.elapsed();
-        let success_rate = successful_tests as f64 / (successful_tests + failed_tests) as f64 * 100.0;
+        let success_rate =
+            successful_tests as f64 / (successful_tests + failed_tests) as f64 * 100.0;
 
-        info!("📊 Test suite complete: {}/{} passed ({:.1}%) in {:.2}s",
-              successful_tests, successful_tests + failed_tests, success_rate, suite_duration.as_secs_f64());
+        info!(
+            "📊 Test suite complete: {}/{} passed ({:.1}%) in {:.2}s",
+            successful_tests,
+            successful_tests + failed_tests,
+            success_rate,
+            suite_duration.as_secs_f64()
+        );
 
         Ok(TestSuiteReport {
             total_tests: successful_tests + failed_tests,
@@ -296,7 +322,11 @@ impl ProductionTestingFramework {
             duration_ms: execution_start.elapsed().as_millis() as f64,
             success,
             metrics,
-            error_message: if success { None } else { Some("Latency target not met".to_string()) },
+            error_message: if success {
+                None
+            } else {
+                Some("Latency target not met".to_string())
+            },
             recommendations,
         })
     }
@@ -369,8 +399,16 @@ impl ProductionTestingFramework {
             duration_ms: execution_start.elapsed().as_millis() as f64,
             success,
             metrics,
-            error_message: if success { None } else { Some("Integration tests failed".to_string()) },
-            recommendations: if success { vec![] } else { vec!["Check network connectivity and service health".to_string()] },
+            error_message: if success {
+                None
+            } else {
+                Some("Integration tests failed".to_string())
+            },
+            recommendations: if success {
+                vec![]
+            } else {
+                vec!["Check network connectivity and service health".to_string()]
+            },
         })
     }
 
@@ -388,7 +426,8 @@ impl ProductionTestingFramework {
                 let mut operations = 0;
                 let mut errors = 0;
 
-                for _ in 0..100 { // 100 operations per connection
+                for _ in 0..100 {
+                    // 100 operations per connection
                     match Self::simulate_mev_operation().await {
                         Ok(_) => operations += 1,
                         Err(_) => errors += 1,
@@ -447,8 +486,16 @@ impl ProductionTestingFramework {
             duration_ms: execution_start.elapsed().as_millis() as f64,
             success,
             metrics,
-            error_message: if success { None } else { Some("Load test failed to meet requirements".to_string()) },
-            recommendations: if success { vec![] } else { vec!["Consider optimizing for higher throughput".to_string()] },
+            error_message: if success {
+                None
+            } else {
+                Some("Load test failed to meet requirements".to_string())
+            },
+            recommendations: if success {
+                vec![]
+            } else {
+                vec!["Consider optimizing for higher throughput".to_string()]
+            },
         })
     }
 
@@ -481,8 +528,16 @@ impl ProductionTestingFramework {
             duration_ms: execution_start.elapsed().as_millis() as f64,
             success,
             metrics,
-            error_message: if success { None } else { Some("Failover took too long".to_string()) },
-            recommendations: if success { vec![] } else { vec!["Optimize failover detection and switching".to_string()] },
+            error_message: if success {
+                None
+            } else {
+                Some("Failover took too long".to_string())
+            },
+            recommendations: if success {
+                vec![]
+            } else {
+                vec!["Optimize failover detection and switching".to_string()]
+            },
         })
     }
 
@@ -522,8 +577,16 @@ impl ProductionTestingFramework {
             duration_ms: execution_start.elapsed().as_millis() as f64,
             success,
             metrics,
-            error_message: if success { None } else { Some("Security tests failed".to_string()) },
-            recommendations: if success { vec![] } else { vec!["Review security implementations".to_string()] },
+            error_message: if success {
+                None
+            } else {
+                Some("Security tests failed".to_string())
+            },
+            recommendations: if success {
+                vec![]
+            } else {
+                vec!["Review security implementations".to_string()]
+            },
         })
     }
 
@@ -559,7 +622,11 @@ impl ProductionTestingFramework {
             duration_ms: execution_start.elapsed().as_millis() as f64,
             success,
             metrics,
-            error_message: if success { None } else { Some("End-to-end test failed".to_string()) },
+            error_message: if success {
+                None
+            } else {
+                Some("End-to-end test failed".to_string())
+            },
             recommendations: if success {
                 vec!["System is ready for production".to_string()]
             } else {
@@ -593,7 +660,8 @@ impl ProductionTestingFramework {
     async fn simulate_mev_operation() -> Result<()> {
         // Simulate MEV operation for load testing
         tokio::time::sleep(Duration::from_millis(10)).await;
-        if fastrand::f64() > 0.95 { // 5% failure rate
+        if fastrand::f64() > 0.95 {
+            // 5% failure rate
             Err(anyhow::anyhow!("Simulated operation failure"))
         } else {
             Ok(())
@@ -650,31 +718,37 @@ impl ProductionTestingFramework {
 
     fn is_environment_compatible(&self, required: &SolanaNetwork) -> bool {
         if let Some(env) = self.test_environments.get(&self.current_environment) {
-            matches!((&env.network, required),
-                (SolanaNetwork::Devnet, SolanaNetwork::Devnet) |
-                (SolanaNetwork::Testnet, SolanaNetwork::Testnet) |
-                (SolanaNetwork::MainnetBeta, SolanaNetwork::MainnetBeta))
+            matches!(
+                (&env.network, required),
+                (SolanaNetwork::Devnet, SolanaNetwork::Devnet)
+                    | (SolanaNetwork::Testnet, SolanaNetwork::Testnet)
+                    | (SolanaNetwork::MainnetBeta, SolanaNetwork::MainnetBeta)
+            )
         } else {
             false
         }
     }
 
     fn generate_test_summary(&self) -> String {
-        format!("Executed {} tests in {} environment",
-                self.test_results.len(), self.current_environment)
+        format!(
+            "Executed {} tests in {} environment",
+            self.test_results.len(),
+            self.current_environment
+        )
     }
 
     fn generate_recommendations(&self) -> Vec<String> {
         let mut recommendations = Vec::new();
 
-        let failed_tests: Vec<_> = self.test_results.iter()
-            .filter(|r| !r.success)
-            .collect();
+        let failed_tests: Vec<_> = self.test_results.iter().filter(|r| !r.success).collect();
 
         if failed_tests.is_empty() {
             recommendations.push("All tests passed - system is ready for production".to_string());
         } else {
-            recommendations.push(format!("{} tests failed - review issues before production", failed_tests.len()));
+            recommendations.push(format!(
+                "{} tests failed - review issues before production",
+                failed_tests.len()
+            ));
 
             for test in failed_tests.iter().take(3) {
                 if let Some(error) = &test.error_message {

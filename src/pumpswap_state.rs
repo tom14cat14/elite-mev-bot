@@ -14,11 +14,11 @@ pub const PUMPSWAP_PROGRAM_ID: &str = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF
 /// PumpSwap bonding curve state - essential fields for swap execution
 #[derive(Debug, Clone)]
 pub struct PumpSwapBondingCurveState {
-    pub bonding_curve: Pubkey,             // Bonding curve address
-    pub token_mint: Pubkey,                // Token mint address
-    pub associated_bonding_curve: Pubkey,  // Associated bonding curve token account
-    pub global: Pubkey,                    // Global state account
-    pub fee_recipient: Pubkey,             // Fee recipient account
+    pub bonding_curve: Pubkey,            // Bonding curve address
+    pub token_mint: Pubkey,               // Token mint address
+    pub associated_bonding_curve: Pubkey, // Associated bonding curve token account
+    pub global: Pubkey,                   // Global state account
+    pub fee_recipient: Pubkey,            // Fee recipient account
 }
 
 impl PumpSwapBondingCurveState {
@@ -50,7 +50,7 @@ impl PumpSwapBondingCurveState {
             bonding_curve: *bonding_curve_pubkey,
             token_mint: Pubkey::default(), // Will be set when fetching
             associated_bonding_curve: Pubkey::default(), // Will be derived
-            global: Pubkey::default(), // Will be set from constants
+            global: Pubkey::default(),     // Will be set from constants
             fee_recipient: Pubkey::default(), // Will be set from constants
         })
     }
@@ -87,10 +87,7 @@ impl PumpSwapBondingCurveState {
 
         // Derive associated bonding curve (PDA for bonding curve's token account)
         let (associated_bonding_curve, _bump) = Pubkey::find_program_address(
-            &[
-                b"bonding-curve",
-                token_mint.as_ref(),
-            ],
+            &[b"bonding-curve", token_mint.as_ref()],
             &pumpswap_program,
         );
         state.associated_bonding_curve = associated_bonding_curve;

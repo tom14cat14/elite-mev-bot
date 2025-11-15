@@ -3,13 +3,13 @@
 //! Builds swap instructions for Raydium CPMM pools to enable sandwich attacks.
 //! CPMM is a simple constant product AMM (x * y = k).
 
+use crate::raydium_cpmm_state::RaydiumCpmmPoolState;
 use anyhow::{anyhow, Result};
 use solana_sdk::{
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
 };
 use std::str::FromStr;
-use crate::raydium_cpmm_state::RaydiumCpmmPoolState;
 
 /// Raydium CPMM program ID
 pub const RAYDIUM_CPMM_PROGRAM_ID: &str = "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C";
@@ -205,15 +205,21 @@ mod tests {
 
         // Verify amount_in encoding (little-endian u64 at bytes 1-8)
         let parsed_amount_in = u64::from_le_bytes([
-            ix.data[1], ix.data[2], ix.data[3], ix.data[4],
-            ix.data[5], ix.data[6], ix.data[7], ix.data[8],
+            ix.data[1], ix.data[2], ix.data[3], ix.data[4], ix.data[5], ix.data[6], ix.data[7],
+            ix.data[8],
         ]);
         assert_eq!(parsed_amount_in, amount_in);
 
         // Verify min_amount_out encoding (little-endian u64 at bytes 9-16)
         let parsed_min_out = u64::from_le_bytes([
-            ix.data[9], ix.data[10], ix.data[11], ix.data[12],
-            ix.data[13], ix.data[14], ix.data[15], ix.data[16],
+            ix.data[9],
+            ix.data[10],
+            ix.data[11],
+            ix.data[12],
+            ix.data[13],
+            ix.data[14],
+            ix.data[15],
+            ix.data[16],
         ]);
         assert_eq!(parsed_min_out, min_amount_out);
     }

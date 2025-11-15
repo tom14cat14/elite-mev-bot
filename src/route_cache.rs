@@ -38,8 +38,10 @@ pub struct CacheStats {
 impl RouteCache {
     /// Create new route cache optimized for MEV performance
     pub fn new(default_ttl_seconds: u64, max_entries: usize) -> Self {
-        info!("🚀 Initializing route cache with {}s TTL, {} max entries",
-              default_ttl_seconds, max_entries);
+        info!(
+            "🚀 Initializing route cache with {}s TTL, {} max entries",
+            default_ttl_seconds, max_entries
+        );
 
         Self {
             cache: Arc::new(RwLock::new(HashMap::new())),
@@ -66,8 +68,10 @@ impl RouteCache {
                 if now <= entry.expires_at {
                     Some(entry.route_data.clone())
                 } else {
-                    debug!("⏰ Route cache EXPIRED for {}->{} ({})",
-                           input_mint, output_mint, amount);
+                    debug!(
+                        "⏰ Route cache EXPIRED for {}->{} ({})",
+                        input_mint, output_mint, amount
+                    );
                     None
                 }
             } else {
@@ -92,8 +96,10 @@ impl RouteCache {
                 }
             }
 
-            debug!("💰 Route cache HIT for {}->{} ({}), saved ~95ms",
-                   input_mint, output_mint, amount);
+            debug!(
+                "💰 Route cache HIT for {}->{} ({}), saved ~95ms",
+                input_mint, output_mint, amount
+            );
 
             return Some(route_data);
         }
@@ -104,8 +110,10 @@ impl RouteCache {
             stats.cache_misses += 1;
         }
 
-        debug!("❌ Route cache MISS for {}->{} ({})",
-               input_mint, output_mint, amount);
+        debug!(
+            "❌ Route cache MISS for {}->{} ({})",
+            input_mint, output_mint, amount
+        );
         None
     }
 
@@ -141,8 +149,13 @@ impl RouteCache {
             cache.insert(key.clone(), entry);
         }
 
-        debug!("💾 Stored route {}->{} ({}) in cache with TTL {}s",
-               input_mint, output_mint, amount, ttl.as_secs());
+        debug!(
+            "💾 Stored route {}->{} ({}) in cache with TTL {}s",
+            input_mint,
+            output_mint,
+            amount,
+            ttl.as_secs()
+        );
     }
 
     /// Get cache performance statistics
@@ -185,11 +198,11 @@ impl RouteCache {
     /// Small differences in amounts can use same route
     fn get_amount_tier(&self, amount: u64) -> String {
         match amount {
-            0..=1_000_000 => "micro".to_string(),           // <1M
-            1_000_001..=10_000_000 => "small".to_string(),  // 1M-10M
-            10_000_001..=100_000_000 => "medium".to_string(), // 10M-100M
+            0..=1_000_000 => "micro".to_string(),               // <1M
+            1_000_001..=10_000_000 => "small".to_string(),      // 1M-10M
+            10_000_001..=100_000_000 => "medium".to_string(),   // 10M-100M
             100_000_001..=1_000_000_000 => "large".to_string(), // 100M-1B
-            _ => "huge".to_string(),                         // >1B
+            _ => "huge".to_string(),                            // >1B
         }
     }
 
@@ -242,19 +255,27 @@ impl RouteCache {
         });
 
         if removed > 0 {
-            info!("🔄 Invalidated {} cache entries for pair {}->{}",
-                  removed, input_mint, output_mint);
+            info!(
+                "🔄 Invalidated {} cache entries for pair {}->{}",
+                removed, input_mint, output_mint
+            );
         }
     }
 
     /// Pre-warm cache with common trading pairs
     pub async fn prewarm_cache(&self, common_pairs: Vec<(String, String, u64)>) {
-        info!("🔥 Pre-warming cache with {} common pairs", common_pairs.len());
+        info!(
+            "🔥 Pre-warming cache with {} common pairs",
+            common_pairs.len()
+        );
 
         // This would integrate with Jupiter API to pre-fetch routes
         // For now, we'll just log the pairs that should be pre-warmed
         for (input_mint, output_mint, amount) in common_pairs {
-            debug!("🎯 Should pre-warm: {} -> {} ({})", input_mint, output_mint, amount);
+            debug!(
+                "🎯 Should pre-warm: {} -> {} ({})",
+                input_mint, output_mint, amount
+            );
         }
     }
 }
@@ -277,7 +298,7 @@ impl Default for RouteCache {
         // Optimized defaults for MEV trading
         Self::new(
             2,      // 2 second TTL for high volatility
-            10_000  // 10k max entries for memory efficiency
+            10_000, // 10k max entries for memory efficiency
         )
     }
 }

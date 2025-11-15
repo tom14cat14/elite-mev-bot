@@ -2,13 +2,13 @@
 //!
 //! Builds swap instructions for Raydium AMM V4 pools to enable sandwich attacks.
 
+use crate::raydium_pool_state::RaydiumPoolState;
 use anyhow::{anyhow, Result};
 use solana_sdk::{
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
 };
 use std::str::FromStr;
-use crate::raydium_pool_state::RaydiumPoolState;
 
 /// Raydium AMM V4 program ID
 pub const RAYDIUM_AMM_V4_PROGRAM_ID: &str = "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8";

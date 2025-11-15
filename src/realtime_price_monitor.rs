@@ -54,9 +54,9 @@ impl RealtimePriceMonitor {
 
         // Filter constants (same as Arb_Bot)
         const MAX_AGE_MINUTES: i64 = 30;
-        const MIN_VOLUME_24H_SOL: f64 = 0.01;   // Layer 1: Minimum volume
-        const MIN_SWAP_COUNT_24H: usize = 5;     // Layer 2a: Minimum swaps
-        const MAX_PRICE_DEVIATION: f64 = 0.50;   // Layer 3: Max deviation from median
+        const MIN_VOLUME_24H_SOL: f64 = 0.01; // Layer 1: Minimum volume
+        const MIN_SWAP_COUNT_24H: usize = 5; // Layer 2a: Minimum swaps
+        const MAX_PRICE_DEVIATION: f64 = 0.50; // Layer 3: Max deviation from median
 
         // LAYER 3: Calculate median prices per token
         let mut token_prices: HashMap<String, Vec<f64>> = HashMap::new();
@@ -181,19 +181,17 @@ impl RealtimePriceMonitor {
         let mut cache = self.price_cache.write().await;
 
         // Get or create price data
-        let price_data = cache.entry(cache_key.clone()).or_insert_with(|| {
-            PriceData {
-                price: TokenPrice {
-                    token_mint: token_mint.clone(),
-                    dex: format!("{}_{}", dex_name, pool_id),
-                    pool_address: pool_address.clone(),
-                    price_sol: 0.0,
-                    last_update: Utc::now(),
-                    volume_24h: 0.0,
-                    swap_count_24h: 0,
-                },
-                volume_tracker: VolumeTracker::new(),
-            }
+        let price_data = cache.entry(cache_key.clone()).or_insert_with(|| PriceData {
+            price: TokenPrice {
+                token_mint: token_mint.clone(),
+                dex: format!("{}_{}", dex_name, pool_id),
+                pool_address: pool_address.clone(),
+                price_sol: 0.0,
+                last_update: Utc::now(),
+                volume_24h: 0.0,
+                swap_count_24h: 0,
+            },
+            volume_tracker: VolumeTracker::new(),
         });
 
         // Add swap to volume tracker (automatically expires old swaps)
@@ -220,7 +218,7 @@ impl RealtimePriceMonitor {
 pub async fn run_price_monitoring(
     endpoint: String,
     rpc_url: String,
-    monitor: Arc<RealtimePriceMonitor>
+    monitor: Arc<RealtimePriceMonitor>,
 ) -> Result<()> {
     // CRITICAL DEBUG: First line of function execution
     eprintln!("🔴 DEBUG: run_price_monitoring FUNCTION ENTERED");
@@ -240,23 +238,31 @@ pub async fn run_price_monitoring(
     // LOOP 3 FIX: Add timeout and explicit error logging for connection debugging
     eprintln!("🔴 DEBUG: About to call ShredstreamClient::connect");
     let connect_result = tokio::time::timeout(
-        std::time::Duration::from_secs(30),  // Increased from 10s
-        ShredstreamClient::connect(&endpoint)
-    ).await;
+        std::time::Duration::from_secs(30), // Increased from 10s
+        ShredstreamClient::connect(&endpoint),
+    )
+    .await;
     eprintln!("🔴 DEBUG: Connection attempt completed");
 
     eprintln!("🔴 DEBUG: Matching connection result");
     let mut client = match connect_result {
         Ok(Ok(client)) => {
             eprintln!("🔴 DEBUG: Connection SUCCESS branch");
-            info!("✅ Connected to ShredStream successfully in {:?}", start.elapsed());
+            info!(
+                "✅ Connected to ShredStream successfully in {:?}",
+                start.elapsed()
+            );
             debug!("🔌 Connection established, proceeding to subscription...");
             eprintln!("🔴 DEBUG: Returning connected client");
             client
         }
         Ok(Err(e)) => {
             eprintln!("🔴 DEBUG: Connection ERROR branch: {}", e);
-            error!("❌ ShredStream connection failed after {:?}: {}", start.elapsed(), e);
+            error!(
+                "❌ ShredStream connection failed after {:?}: {}",
+                start.elapsed(),
+                e
+            );
             error!("   Endpoint: {}", endpoint);
             error!("   Error type: {:?}", e);
             error!("   Check: IP whitelist (151.243.244.130), endpoint URL");
@@ -285,36 +291,39 @@ pub async fn run_price_monitoring(
         "5quBtoiQqxF9Jv6KYKctB59NT3gtJD2Y65kdnB1Uev3h".to_string(), // Raydium Stable
         // Orca - Multiple Pool Types (2 variants)
         "9W959DqEETiGZocYWCQPaJ6sBmUzgfxXfqGeTEdp3aQP".to_string(), // Orca Legacy
-        "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc".to_string(), // Orca Whirlpools
+        "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc".to_string(),  // Orca Whirlpools
         // Jupiter
         "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4".to_string(), // Jupiter Aggregator
         // Serum
         "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin".to_string(), // Serum DEX
         // Meteora - Multiple Pool Types (3 variants)
         "Eo7WjKq67rjJQSZxS6z3YkapzY3eMj6Xy8X5EQVn5UaB".to_string(), // Meteora DAMM V1
-        "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo".to_string(), // Meteora DLMM
-        "cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG".to_string(), // Meteora DAMM V2
+        "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo".to_string(),  // Meteora DLMM
+        "cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG".to_string(),  // Meteora DAMM V2
         // PumpFun/PumpSwap
         "GMk6j2defJhS7F194toqmJNFNhAkbDXhYJo5oR3Rpump".to_string(), // PumpSwap
         // Additional DEXs
         "AMM55ShdkoGRB5jVYPjWziwk8m5MpwyDgsMWHaMSQWH6".to_string(), // Aldrin
-        "SSwpkEEWHvCXCNWnMYXVW7gCYDXkF4aQMxKdpEqrZks".to_string(), // Saros
+        "SSwpkEEWHvCXCNWnMYXVW7gCYDXkF4aQMxKdpEqrZks".to_string(),  // Saros
         "6MLxLqiXaaSUpkgMnWDTuejNZEz3kE7k2woyHGVFw319".to_string(), // Crema
         "CTMAxxk34HjKWxQ3QLZQA1EQdxtjbYGP4Qjrw7nTn8bM".to_string(), // Cropper
         "EewxydAPCCVuNEyrVN68PuSYdQ7wKn27V9Gjeoi8dy3S".to_string(), // Lifinity
         "FLUXBmPhT3Fd1EDVFdg46YREqHBeNypn1h4EbnTzWERX".to_string(), // Fluxbeam
     ];
 
-    info!("🎯 Filtering ShredStream for {} DEX programs", dex_programs.len());
+    info!(
+        "🎯 Filtering ShredStream for {} DEX programs",
+        dex_programs.len()
+    );
     debug!("📋 DEX programs to monitor: {}", dex_programs.len());
 
     // Create subscription request with DEX program filters
     debug!("📝 Creating subscription request...");
     let request = ShredstreamClient::create_entries_request_for_accounts(
-        vec![],                              // accounts (empty = all)
-        dex_programs,                        // owner addresses = DEX program IDs
-        vec![],                              // transaction account addresses (empty = all)
-        Some(CommitmentLevel::Processed),    // commitment level
+        vec![],                           // accounts (empty = all)
+        dex_programs,                     // owner addresses = DEX program IDs
+        vec![],                           // transaction account addresses (empty = all)
+        Some(CommitmentLevel::Processed), // commitment level
     );
 
     // Subscribe to entries stream
@@ -354,21 +363,26 @@ pub async fn run_price_monitoring(
                 for entry in entries {
                     for tx in entry.transactions {
                         // Parse DEX swap transaction (now async for decimal fetching)
-                        if let Some(swap_info) = dex_parser.parse_transaction(
-                            &tx,
-                            format!("{:?}", tx.signatures[0]),
-                            slot_entry.slot,
-                        ).await {
+                        if let Some(swap_info) = dex_parser
+                            .parse_transaction(
+                                &tx,
+                                format!("{:?}", tx.signatures[0]),
+                                slot_entry.slot,
+                            )
+                            .await
+                        {
                             swaps_detected += 1;
 
                             // Update price cache with real swap data
-                            monitor.update_price(
-                                swap_info.token_mint,
-                                swap_info.dex_name,
-                                swap_info.pool_address,
-                                swap_info.price_sol,
-                                swap_info.amount_in as f64 / 1e9, // Convert lamports to SOL
-                            ).await;
+                            monitor
+                                .update_price(
+                                    swap_info.token_mint,
+                                    swap_info.dex_name,
+                                    swap_info.pool_address,
+                                    swap_info.price_sol,
+                                    swap_info.amount_in as f64 / 1e9, // Convert lamports to SOL
+                                )
+                                .await;
 
                             if swaps_detected % 100 == 0 {
                                 let cache_size = monitor.price_cache.read().await.len();

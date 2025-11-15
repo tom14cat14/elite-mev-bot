@@ -3,14 +3,14 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
-use tokio::sync::RwLock;
 use std::sync::Arc;
+use tokio::sync::RwLock;
 use tracing::{debug, info};
 
-use crate::arbitrage_engine::{ArbitrageOpportunity, ArbitrageExecution, ArbitrageStats};
-use crate::sandwich_engine::{SandwichOpportunity, SandwichExecution, SandwichStats};
-use crate::liquidation_engine::{LiquidationOpportunity, LiquidationExecution, LiquidationStats};
+use crate::arbitrage_engine::{ArbitrageExecution, ArbitrageOpportunity, ArbitrageStats};
+use crate::liquidation_engine::{LiquidationExecution, LiquidationOpportunity, LiquidationStats};
 use crate::mempool_monitor::{MonitorStats, OpportunityEvent};
+use crate::sandwich_engine::{SandwichExecution, SandwichOpportunity, SandwichStats};
 
 /// High-performance in-memory database with optional persistence
 /// Tracks all MEV opportunities, executions, and performance metrics
@@ -206,14 +206,19 @@ impl DatabaseTracker {
 
         self.stats.total_opportunities_tracked += 1;
 
-        debug!("📊 Tracked opportunity: {} ({:.4} SOL profit)",
-               opportunity.opportunity_id, opportunity.estimated_profit_sol);
+        debug!(
+            "📊 Tracked opportunity: {} ({:.4} SOL profit)",
+            opportunity.opportunity_id, opportunity.estimated_profit_sol
+        );
 
         Ok(())
     }
 
     /// Track a sandwich opportunity
-    pub async fn track_sandwich_opportunity(&mut self, opportunity: &SandwichOpportunity) -> Result<()> {
+    pub async fn track_sandwich_opportunity(
+        &mut self,
+        opportunity: &SandwichOpportunity,
+    ) -> Result<()> {
         let record = OpportunityRecord {
             opportunity_id: opportunity.opportunity_id.clone(),
             opportunity_type: OpportunityType::Sandwich,
@@ -234,7 +239,10 @@ impl DatabaseTracker {
     }
 
     /// Track an arbitrage opportunity
-    pub async fn track_arbitrage_opportunity(&mut self, opportunity: &ArbitrageOpportunity) -> Result<()> {
+    pub async fn track_arbitrage_opportunity(
+        &mut self,
+        opportunity: &ArbitrageOpportunity,
+    ) -> Result<()> {
         let record = OpportunityRecord {
             opportunity_id: opportunity.opportunity_id.clone(),
             opportunity_type: OpportunityType::Arbitrage,
@@ -255,7 +263,10 @@ impl DatabaseTracker {
     }
 
     /// Track a liquidation opportunity
-    pub async fn track_liquidation_opportunity(&mut self, opportunity: &LiquidationOpportunity) -> Result<()> {
+    pub async fn track_liquidation_opportunity(
+        &mut self,
+        opportunity: &LiquidationOpportunity,
+    ) -> Result<()> {
         let record = OpportunityRecord {
             opportunity_id: opportunity.opportunity_id.clone(),
             opportunity_type: OpportunityType::Liquidation,
@@ -292,7 +303,10 @@ impl DatabaseTracker {
             transaction_signatures: vec![
                 execution.front_run_signature.clone().unwrap_or_default(),
                 execution.back_run_signature.clone().unwrap_or_default(),
-            ].into_iter().filter(|s| !s.is_empty()).collect(),
+            ]
+            .into_iter()
+            .filter(|s| !s.is_empty())
+            .collect(),
             gas_used: 100000, // Estimated
             metadata: serde_json::to_value(execution)?,
         };
@@ -312,16 +326,26 @@ impl DatabaseTracker {
             self.stats.total_profit_tracked_sol += execution.actual_profit_sol;
         }
 
-        self.update_daily_stats(&execution.opportunity_id, execution.actual_profit_sol, execution.success).await;
+        self.update_daily_stats(
+            &execution.opportunity_id,
+            execution.actual_profit_sol,
+            execution.success,
+        )
+        .await;
 
-        info!("📊 Tracked sandwich execution: {} ({:.4} SOL profit, {}ms)",
-              execution.opportunity_id, execution.actual_profit_sol, execution.execution_time_ms);
+        info!(
+            "📊 Tracked sandwich execution: {} ({:.4} SOL profit, {}ms)",
+            execution.opportunity_id, execution.actual_profit_sol, execution.execution_time_ms
+        );
 
         Ok(())
     }
 
     /// Track an arbitrage execution
-    pub async fn track_arbitrage_execution(&mut self, execution: &ArbitrageExecution) -> Result<()> {
+    pub async fn track_arbitrage_execution(
+        &mut self,
+        execution: &ArbitrageExecution,
+    ) -> Result<()> {
         let execution_id = uuid::Uuid::new_v4().to_string();
 
         let record = ExecutionRecord {
@@ -335,7 +359,7 @@ impl DatabaseTracker {
             error_message: execution.error_message.clone(),
             bundle_id: Some(execution.bundle_id.clone()),
             transaction_signatures: vec![], // ArbitrageExecution doesn't have transaction_signatures yet
-            gas_used: 150000, // Estimated (two trades)
+            gas_used: 150000,               // Estimated (two trades)
             metadata: serde_json::to_value(execution)?,
         };
 
@@ -354,16 +378,26 @@ impl DatabaseTracker {
             self.stats.total_profit_tracked_sol += execution.actual_profit_sol;
         }
 
-        self.update_daily_stats(&execution.opportunity_id, execution.actual_profit_sol, execution.success).await;
+        self.update_daily_stats(
+            &execution.opportunity_id,
+            execution.actual_profit_sol,
+            execution.success,
+        )
+        .await;
 
-        info!("📊 Tracked arbitrage execution: {} ({:.4} SOL profit, {}ms)",
-              execution.opportunity_id, execution.actual_profit_sol, execution.execution_time_ms);
+        info!(
+            "📊 Tracked arbitrage execution: {} ({:.4} SOL profit, {}ms)",
+            execution.opportunity_id, execution.actual_profit_sol, execution.execution_time_ms
+        );
 
         Ok(())
     }
 
     /// Track a liquidation execution
-    pub async fn track_liquidation_execution(&mut self, execution: &LiquidationExecution) -> Result<()> {
+    pub async fn track_liquidation_execution(
+        &mut self,
+        execution: &LiquidationExecution,
+    ) -> Result<()> {
         let execution_id = uuid::Uuid::new_v4().to_string();
 
         let record = ExecutionRecord {
@@ -376,7 +410,11 @@ impl DatabaseTracker {
             success: execution.success,
             error_message: execution.error_message.clone(),
             bundle_id: Some(execution.bundle_id.clone()),
-            transaction_signatures: execution.liquidation_signature.clone().into_iter().collect(),
+            transaction_signatures: execution
+                .liquidation_signature
+                .clone()
+                .into_iter()
+                .collect(),
             gas_used: 80000, // Estimated
             metadata: serde_json::to_value(execution)?,
         };
@@ -396,10 +434,17 @@ impl DatabaseTracker {
             self.stats.total_profit_tracked_sol += execution.actual_profit_sol;
         }
 
-        self.update_daily_stats(&execution.opportunity_id, execution.actual_profit_sol, execution.success).await;
+        self.update_daily_stats(
+            &execution.opportunity_id,
+            execution.actual_profit_sol,
+            execution.success,
+        )
+        .await;
 
-        info!("📊 Tracked liquidation execution: {} ({:.4} SOL profit, {}ms)",
-              execution.opportunity_id, execution.actual_profit_sol, execution.execution_time_ms);
+        info!(
+            "📊 Tracked liquidation execution: {} ({:.4} SOL profit, {}ms)",
+            execution.opportunity_id, execution.actual_profit_sol, execution.execution_time_ms
+        );
 
         Ok(())
     }
@@ -443,23 +488,25 @@ impl DatabaseTracker {
         let today = Utc::now().format("%Y-%m-%d").to_string();
 
         let mut daily_stats = self.daily_stats.write().await;
-        let stats = daily_stats.entry(today.clone()).or_insert_with(|| DailyStats {
-            date: today,
-            opportunities_detected: 0,
-            opportunities_executed: 0,
-            total_profit_sol: 0.0,
-            average_execution_time_ms: 0.0,
-            success_rate_percent: 0.0,
-            top_profitable_opportunity: None,
-            engine_breakdown: EngineBreakdown {
-                sandwich_profit_sol: 0.0,
-                arbitrage_profit_sol: 0.0,
-                liquidation_profit_sol: 0.0,
-                sandwich_executions: 0,
-                arbitrage_executions: 0,
-                liquidation_executions: 0,
-            },
-        });
+        let stats = daily_stats
+            .entry(today.clone())
+            .or_insert_with(|| DailyStats {
+                date: today,
+                opportunities_detected: 0,
+                opportunities_executed: 0,
+                total_profit_sol: 0.0,
+                average_execution_time_ms: 0.0,
+                success_rate_percent: 0.0,
+                top_profitable_opportunity: None,
+                engine_breakdown: EngineBreakdown {
+                    sandwich_profit_sol: 0.0,
+                    arbitrage_profit_sol: 0.0,
+                    liquidation_profit_sol: 0.0,
+                    sandwich_executions: 0,
+                    arbitrage_executions: 0,
+                    liquidation_executions: 0,
+                },
+            });
 
         if success {
             stats.opportunities_executed += 1;
@@ -473,7 +520,8 @@ impl DatabaseTracker {
 
         // Recalculate success rate
         if stats.opportunities_detected > 0 {
-            stats.success_rate_percent = (stats.opportunities_executed as f64 / stats.opportunities_detected as f64) * 100.0;
+            stats.success_rate_percent =
+                (stats.opportunities_executed as f64 / stats.opportunities_detected as f64) * 100.0;
         }
     }
 
@@ -484,8 +532,8 @@ impl DatabaseTracker {
             memory_usage_mb: 2048.0 + (fastrand::f64() * 512.0), // 2-2.5GB
             network_latency_ms: 10.0 + (fastrand::f64() * 20.0), // 10-30ms
             jupiter_api_rate_limit_remaining: 45 + fastrand::u32(..10), // 45-54 remaining
-            jito_bundle_queue_size: fastrand::usize(..5), // 0-4 bundles
-            active_opportunities: fastrand::usize(..20), // 0-19 opportunities
+            jito_bundle_queue_size: fastrand::usize(..5),       // 0-4 bundles
+            active_opportunities: fastrand::usize(..20),        // 0-19 opportunities
         }
     }
 
@@ -496,25 +544,32 @@ impl DatabaseTracker {
         let opportunities = self.opportunities.read().await;
         let executions = self.executions.read().await;
 
-        let recent_opportunities: Vec<_> = opportunities.values()
+        let recent_opportunities: Vec<_> = opportunities
+            .values()
             .filter(|opp| opp.detected_at > cutoff)
             .cloned()
             .collect();
 
-        let recent_executions: Vec<_> = executions.values()
+        let recent_executions: Vec<_> = executions
+            .values()
             .filter(|exec| exec.executed_at > cutoff)
             .cloned()
             .collect();
 
         let total_opportunities = recent_opportunities.len() as u64;
         let total_executions = recent_executions.len() as u64;
-        let total_profit_sol: f64 = recent_executions.iter()
+        let total_profit_sol: f64 = recent_executions
+            .iter()
             .filter(|e| e.success)
             .map(|e| e.actual_profit_sol)
             .sum();
 
         let average_execution_time_ms = if total_executions > 0 {
-            recent_executions.iter().map(|e| e.execution_time_ms as f64).sum::<f64>() / total_executions as f64
+            recent_executions
+                .iter()
+                .map(|e| e.execution_time_ms as f64)
+                .sum::<f64>()
+                / total_executions as f64
         } else {
             0.0
         };
@@ -527,28 +582,42 @@ impl DatabaseTracker {
 
         // Profit breakdown by engine
         let mut profit_by_engine = HashMap::new();
-        profit_by_engine.insert("sandwich".to_string(),
-            recent_executions.iter()
+        profit_by_engine.insert(
+            "sandwich".to_string(),
+            recent_executions
+                .iter()
                 .filter(|e| matches!(e.execution_type, ExecutionType::SandwichAttack) && e.success)
                 .map(|e| e.actual_profit_sol)
-                .sum::<f64>()
+                .sum::<f64>(),
         );
-        profit_by_engine.insert("arbitrage".to_string(),
-            recent_executions.iter()
-                .filter(|e| matches!(e.execution_type, ExecutionType::ArbitrageExecution) && e.success)
+        profit_by_engine.insert(
+            "arbitrage".to_string(),
+            recent_executions
+                .iter()
+                .filter(|e| {
+                    matches!(e.execution_type, ExecutionType::ArbitrageExecution) && e.success
+                })
                 .map(|e| e.actual_profit_sol)
-                .sum::<f64>()
+                .sum::<f64>(),
         );
-        profit_by_engine.insert("liquidation".to_string(),
-            recent_executions.iter()
-                .filter(|e| matches!(e.execution_type, ExecutionType::LiquidationExecution) && e.success)
+        profit_by_engine.insert(
+            "liquidation".to_string(),
+            recent_executions
+                .iter()
+                .filter(|e| {
+                    matches!(e.execution_type, ExecutionType::LiquidationExecution) && e.success
+                })
                 .map(|e| e.actual_profit_sol)
-                .sum::<f64>()
+                .sum::<f64>(),
         );
 
         // Top opportunities by profit
         let mut top_opportunities = recent_opportunities;
-        top_opportunities.sort_by(|a, b| b.estimated_profit_sol.partial_cmp(&a.estimated_profit_sol).unwrap());
+        top_opportunities.sort_by(|a, b| {
+            b.estimated_profit_sol
+                .partial_cmp(&a.estimated_profit_sol)
+                .unwrap()
+        });
         top_opportunities.truncate(10);
 
         Ok(PerformanceReport {
@@ -579,7 +648,11 @@ impl DatabaseTracker {
         executions.retain(|_, exec| exec.executed_at > cutoff);
         daily_stats.retain(|date, _| {
             if let Ok(parsed_date) = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d") {
-                let date_time = parsed_date.and_hms_opt(0, 0, 0).unwrap().and_local_timezone(Utc).unwrap();
+                let date_time = parsed_date
+                    .and_hms_opt(0, 0, 0)
+                    .unwrap()
+                    .and_local_timezone(Utc)
+                    .unwrap();
                 date_time > cutoff
             } else {
                 false
@@ -590,7 +663,10 @@ impl DatabaseTracker {
         let cleaned_exec = initial_exec_count - executions.len();
 
         if cleaned_opp > 0 || cleaned_exec > 0 {
-            info!("🧹 Cleaned up {} old opportunities and {} old executions", cleaned_opp, cleaned_exec);
+            info!(
+                "🧹 Cleaned up {} old opportunities and {} old executions",
+                cleaned_opp, cleaned_exec
+            );
         }
 
         Ok(())

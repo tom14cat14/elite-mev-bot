@@ -15,14 +15,14 @@ pub const METEORA_DLMM_PROGRAM_ID: &str = "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9Yu
 /// Meteora DLMM pool state - essential fields for swap execution
 #[derive(Debug, Clone)]
 pub struct MeteoraDlmmPoolState {
-    pub lb_pair: Pubkey,          // Pool ID
-    pub token_x_mint: Pubkey,     // Token X mint
-    pub token_y_mint: Pubkey,     // Token Y mint
-    pub reserve_x: Pubkey,        // Reserve X account
-    pub reserve_y: Pubkey,        // Reserve Y account
-    pub oracle: Pubkey,           // Oracle account
-    pub active_id: i32,           // Current active bin ID
-    pub bin_step: u16,            // Bin step (price precision)
+    pub lb_pair: Pubkey,      // Pool ID
+    pub token_x_mint: Pubkey, // Token X mint
+    pub token_y_mint: Pubkey, // Token Y mint
+    pub reserve_x: Pubkey,    // Reserve X account
+    pub reserve_y: Pubkey,    // Reserve Y account
+    pub oracle: Pubkey,       // Oracle account
+    pub active_id: i32,       // Current active bin ID
+    pub bin_step: u16,        // Bin step (price precision)
 }
 
 impl MeteoraDlmmPoolState {

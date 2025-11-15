@@ -4,10 +4,7 @@
 //! This prevents extracting user wallets or token mints.
 
 use solana_client::rpc_client::RpcClient;
-use solana_sdk::{
-    pubkey::Pubkey,
-    commitment_config::CommitmentConfig,
-};
+use solana_sdk::{commitment_config::CommitmentConfig, pubkey::Pubkey};
 use std::str::FromStr;
 use tracing::{debug, warn};
 
@@ -52,11 +49,7 @@ impl DexProgramIds {
 /// 1. Account exists
 /// 2. Owner matches expected DEX program
 /// 3. Account size is large enough to be a pool (>200 bytes)
-pub fn validate_pool_address(
-    rpc: &RpcClient,
-    candidate: &Pubkey,
-    dex_name: &str,
-) -> bool {
+pub fn validate_pool_address(rpc: &RpcClient, candidate: &Pubkey, dex_name: &str) -> bool {
     // Get expected owner for this DEX
     let expected_owner = match DexProgramIds::get_expected_owner(dex_name) {
         Some(owner) => owner,
@@ -76,13 +69,20 @@ pub fn validate_pool_address(
                 if is_correct_owner && is_large_enough {
                     debug!(
                         "✅ Pool validated: {} | Owner: {} | Size: {} bytes | DEX: {}",
-                        candidate, account.owner, account.data.len(), dex_name
+                        candidate,
+                        account.owner,
+                        account.data.len(),
+                        dex_name
                     );
                     true
                 } else {
                     debug!(
                         "❌ Pool rejected: {} | Owner: {} (expected: {}) | Size: {} | DEX: {}",
-                        candidate, account.owner, expected_owner, account.data.len(), dex_name
+                        candidate,
+                        account.owner,
+                        expected_owner,
+                        account.data.len(),
+                        dex_name
                     );
                     false
                 }
@@ -126,7 +126,10 @@ pub fn scan_for_pool(
         }
     }
 
-    debug!("❌ No valid pool found after scanning {} indices", indices_to_try.len());
+    debug!(
+        "❌ No valid pool found after scanning {} indices",
+        indices_to_try.len()
+    );
     None
 }
 

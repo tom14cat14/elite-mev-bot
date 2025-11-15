@@ -1,10 +1,10 @@
+use crate::simd_bincode::SafeSimdBincode;
 use anyhow::Result;
+use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
-use serde::Serialize;
 use tracing::{info, warn};
-use crate::simd_bincode::SafeSimdBincode;
 
 /// Market cap thresholds for upfront filtering
 /// Implements ~1-3ms savings by rejecting low-cap tokens early
@@ -20,11 +20,11 @@ pub struct MarketCapThresholds {
 impl Default for MarketCapThresholds {
     fn default() -> Self {
         Self {
-            minimum_market_cap_usd: 50_000.0,    // $50K minimum
-            minimum_volume_24h_usd: 10_000.0,    // $10K daily volume
-            minimum_liquidity_usd: 5_000.0,      // $5K liquidity
-            minimum_holder_count: 50,            // 50+ holders
-            maximum_age_minutes: 60,             // Max 1 hour old data
+            minimum_market_cap_usd: 50_000.0, // $50K minimum
+            minimum_volume_24h_usd: 10_000.0, // $10K daily volume
+            minimum_liquidity_usd: 5_000.0,   // $5K liquidity
+            minimum_holder_count: 50,         // 50+ holders
+            maximum_age_minutes: 60,          // Max 1 hour old data
         }
     }
 }
@@ -152,10 +152,9 @@ impl MarketCapFilter {
     #[inline(always)]
     pub fn is_pumpfun_transaction(&self, transaction_data: &[u8]) -> bool {
         const PUMPFUN_PROGRAM_ID: [u8; 32] = [
-            0x06, 0xd1, 0xf2, 0x73, 0x6d, 0x2e, 0x4e, 0x82,
-            0x9c, 0x0a, 0x1b, 0x5c, 0x8f, 0x7e, 0x3d, 0x92,
-            0xa1, 0x4b, 0x6f, 0x8e, 0x7c, 0x5d, 0x3a, 0x9f,
-            0x2e, 0x8b, 0x4c, 0x1d, 0x7a, 0x6e, 0x9f, 0x0c
+            0x06, 0xd1, 0xf2, 0x73, 0x6d, 0x2e, 0x4e, 0x82, 0x9c, 0x0a, 0x1b, 0x5c, 0x8f, 0x7e,
+            0x3d, 0x92, 0xa1, 0x4b, 0x6f, 0x8e, 0x7c, 0x5d, 0x3a, 0x9f, 0x2e, 0x8b, 0x4c, 0x1d,
+            0x7a, 0x6e, 0x9f, 0x0c,
         ]; // PumpFun program ID bytes
 
         SafeSimdBincode::find_program_id(transaction_data, &PUMPFUN_PROGRAM_ID).is_some()
@@ -198,7 +197,9 @@ impl MarketCapFilter {
     #[inline(always)]
     pub fn is_bonding_curve_complete(&self, mint: &str) -> Option<bool> {
         if let Ok(cache) = self.token_cache.read() {
-            cache.get(mint).map(|metrics| metrics.bonding_curve_complete)
+            cache
+                .get(mint)
+                .map(|metrics| metrics.bonding_curve_complete)
         } else {
             None
         }
@@ -216,22 +217,38 @@ impl MarketCapFilter {
 
     /// Get filter statistics
     pub fn get_stats(&self) -> FilterStats {
-        let cache_hits = self.cache_hits.read().map(|guard| *guard).unwrap_or_else(|_| {
-            warn!("RwLock poisoned for cache_hits");
-            0
-        });
-        let cache_misses = self.cache_misses.read().map(|guard| *guard).unwrap_or_else(|_| {
-            warn!("RwLock poisoned for cache_misses");
-            0
-        });
-        let filtered = self.filtered_count.read().map(|guard| *guard).unwrap_or_else(|_| {
-            warn!("RwLock poisoned for filtered_count");
-            0
-        });
-        let passed = self.passed_count.read().map(|guard| *guard).unwrap_or_else(|_| {
-            warn!("RwLock poisoned for passed_count");
-            0
-        });
+        let cache_hits = self
+            .cache_hits
+            .read()
+            .map(|guard| *guard)
+            .unwrap_or_else(|_| {
+                warn!("RwLock poisoned for cache_hits");
+                0
+            });
+        let cache_misses = self
+            .cache_misses
+            .read()
+            .map(|guard| *guard)
+            .unwrap_or_else(|_| {
+                warn!("RwLock poisoned for cache_misses");
+                0
+            });
+        let filtered = self
+            .filtered_count
+            .read()
+            .map(|guard| *guard)
+            .unwrap_or_else(|_| {
+                warn!("RwLock poisoned for filtered_count");
+                0
+            });
+        let passed = self
+            .passed_count
+            .read()
+            .map(|guard| *guard)
+            .unwrap_or_else(|_| {
+                warn!("RwLock poisoned for passed_count");
+                0
+            });
 
         FilterStats {
             cache_hits,
@@ -261,7 +278,10 @@ impl MarketCapFilter {
 
     /// Get cache size
     pub fn cache_size(&self) -> usize {
-        self.token_cache.read().map(|cache| cache.len()).unwrap_or(0)
+        self.token_cache
+            .read()
+            .map(|cache| cache.len())
+            .unwrap_or(0)
     }
 }
 
@@ -278,10 +298,18 @@ pub struct FilterStats {
 impl FilterStats {
     pub fn log_performance(&self) {
         info!("📊 MARKET CAP FILTER PERFORMANCE:");
-        info!("  • Cache Hits: {} | Misses: {} | Hit Ratio: {:.1}%",
-              self.cache_hits, self.cache_misses, self.cache_hit_ratio * 100.0);
-        info!("  • Filtered: {} | Passed: {} | Filter Ratio: {:.1}%",
-              self.filtered_count, self.passed_count, self.filter_ratio * 100.0);
+        info!(
+            "  • Cache Hits: {} | Misses: {} | Hit Ratio: {:.1}%",
+            self.cache_hits,
+            self.cache_misses,
+            self.cache_hit_ratio * 100.0
+        );
+        info!(
+            "  • Filtered: {} | Passed: {} | Filter Ratio: {:.1}%",
+            self.filtered_count,
+            self.passed_count,
+            self.filter_ratio * 100.0
+        );
 
         if self.cache_hit_ratio > 0.8 {
             info!("  • Status: 🔥 EXCELLENT cache performance");
@@ -292,8 +320,10 @@ impl FilterStats {
         }
 
         if self.filter_ratio > 0.5 {
-            info!("  • Filtering: 🎯 High efficiency ({}ms savings est.)",
-                  (self.filter_ratio * 3.0) as u32);
+            info!(
+                "  • Filtering: 🎯 High efficiency ({}ms savings est.)",
+                (self.filter_ratio * 3.0) as u32
+            );
         }
     }
 }
@@ -308,10 +338,9 @@ impl ShredStreamTokenFilter {
     pub fn new(thresholds: MarketCapThresholds) -> Self {
         // PumpFun program ID for SIMD filtering
         const PUMPFUN_PROGRAM_ID: [u8; 32] = [
-            0x06, 0xd1, 0xf2, 0x73, 0x6d, 0x2e, 0x4e, 0x82,
-            0x9c, 0x0a, 0x1b, 0x5c, 0x8f, 0x7e, 0x3d, 0x92,
-            0xa1, 0x4b, 0x6f, 0x8e, 0x7c, 0x5d, 0x3a, 0x9f,
-            0x2e, 0x8b, 0x4c, 0x1d, 0x7a, 0x6e, 0x9f, 0x0c
+            0x06, 0xd1, 0xf2, 0x73, 0x6d, 0x2e, 0x4e, 0x82, 0x9c, 0x0a, 0x1b, 0x5c, 0x8f, 0x7e,
+            0x3d, 0x92, 0xa1, 0x4b, 0x6f, 0x8e, 0x7c, 0x5d, 0x3a, 0x9f, 0x2e, 0x8b, 0x4c, 0x1d,
+            0x7a, 0x6e, 0x9f, 0x0c,
         ];
 
         Self {
@@ -362,9 +391,15 @@ impl ShredStreamTokenFilter {
     }
 
     /// Evaluate token opportunity for trading
-    pub async fn evaluate_token_opportunity(&self, token: &crate::pumpfun_new_coin_detector::NewTokenEvent) -> Result<bool> {
+    pub async fn evaluate_token_opportunity(
+        &self,
+        token: &crate::pumpfun_new_coin_detector::NewTokenEvent,
+    ) -> Result<bool> {
         // Apply market cap filtering
-        if !self.market_cap_filter.should_process_token(&token.mint.to_string()) {
+        if !self
+            .market_cap_filter
+            .should_process_token(&token.mint.to_string())
+        {
             return Ok(false);
         }
 

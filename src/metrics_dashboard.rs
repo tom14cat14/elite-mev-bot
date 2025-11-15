@@ -4,7 +4,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::time::interval;
-use tracing::{info, debug};
+use tracing::{debug, info};
 
 /// Real-time metrics dashboard for Elite MEV bot monitoring
 #[derive(Debug)]
@@ -138,16 +138,16 @@ pub enum AlertSeverity {
 #[derive(Debug, Clone)]
 pub enum NotificationChannel {
     Console,
-    Discord(String), // Webhook URL
-    Slack(String),   // Webhook URL
-    Email(String),   // Email address
+    Discord(String),  // Webhook URL
+    Slack(String),    // Webhook URL
+    Email(String),    // Email address
     Telegram(String), // Bot token and chat ID
 }
 
 impl Default for DashboardConfig {
     fn default() -> Self {
         Self {
-            update_interval_ms: 1000, // 1 second updates
+            update_interval_ms: 1000,    // 1 second updates
             history_retention_hours: 24, // 24 hours of data
             enable_prometheus_export: true,
             prometheus_port: 9090,
@@ -165,7 +165,8 @@ impl Default for DashboardConfig {
 
 impl MetricsDashboard {
     pub fn new(config: DashboardConfig) -> Self {
-        let max_points = (config.history_retention_hours as u64 * 3600 * 1000 / config.update_interval_ms) as usize;
+        let max_points = (config.history_retention_hours as u64 * 3600 * 1000
+            / config.update_interval_ms) as usize;
 
         Self {
             latency_metrics: Arc::new(Mutex::new(LatencyMetrics::new(max_points))),
@@ -181,8 +182,14 @@ impl MetricsDashboard {
     pub async fn start_dashboard(&self) -> Result<()> {
         info!("🚀 Starting Elite MEV Bot Metrics Dashboard");
         info!("  • Update interval: {}ms", self.config.update_interval_ms);
-        info!("  • Data retention: {} hours", self.config.history_retention_hours);
-        info!("  • Prometheus export: {}", self.config.enable_prometheus_export);
+        info!(
+            "  • Data retention: {} hours",
+            self.config.history_retention_hours
+        );
+        info!(
+            "  • Prometheus export: {}",
+            self.config.enable_prometheus_export
+        );
 
         // Start metrics collection task
         self.start_metrics_collection().await?;
@@ -231,10 +238,7 @@ impl MetricsDashboard {
     }
 
     /// Collect system performance metrics
-    async fn collect_system_metrics(
-        system_metrics: &Arc<Mutex<SystemMetrics>>,
-        timestamp: u64,
-    ) {
+    async fn collect_system_metrics(system_metrics: &Arc<Mutex<SystemMetrics>>, timestamp: u64) {
         // Collect CPU usage
         let cpu_usage = Self::get_cpu_usage().await;
 
@@ -249,7 +253,9 @@ impl MetricsDashboard {
             let mut metrics = system_metrics.lock().unwrap();
             metrics.cpu_usage_percent.add_point(timestamp, cpu_usage);
             metrics.memory_usage_mb.add_point(timestamp, memory_usage);
-            metrics.network_latency_ms.add_point(timestamp, network_latency);
+            metrics
+                .network_latency_ms
+                .add_point(timestamp, network_latency);
         }
     }
 
@@ -265,9 +271,15 @@ impl MetricsDashboard {
 
         {
             let mut metrics = performance_metrics.lock().unwrap();
-            metrics.new_tokens_detected_per_second.add_point(timestamp, tokens_per_second);
-            metrics.opportunities_per_minute.add_point(timestamp, opportunities_per_minute);
-            metrics.alpha_capture_rate.add_point(timestamp, alpha_capture_rate);
+            metrics
+                .new_tokens_detected_per_second
+                .add_point(timestamp, tokens_per_second);
+            metrics
+                .opportunities_per_minute
+                .add_point(timestamp, opportunities_per_minute);
+            metrics
+                .alpha_capture_rate
+                .add_point(timestamp, alpha_capture_rate);
         }
     }
 
@@ -276,7 +288,9 @@ impl MetricsDashboard {
         let mut metrics = latency_metrics.lock().unwrap();
 
         // Calculate percentiles for end-to-end latency
-        let values: Vec<f64> = metrics.end_to_end_latency_ms.data
+        let values: Vec<f64> = metrics
+            .end_to_end_latency_ms
+            .data
             .iter()
             .map(|point| point.value)
             .collect();
@@ -315,9 +329,10 @@ impl MetricsDashboard {
                         alerts.trigger_alert(
                             "high_latency".to_string(),
                             AlertSeverity::Warning,
-                            format!("P99 latency {:.1}ms exceeds threshold {:.1}ms",
-                                   latency.current_percentiles.p99_ms,
-                                   thresholds.max_latency_ms),
+                            format!(
+                                "P99 latency {:.1}ms exceeds threshold {:.1}ms",
+                                latency.current_percentiles.p99_ms, thresholds.max_latency_ms
+                            ),
                         );
                     }
                 }
@@ -330,9 +345,11 @@ impl MetricsDashboard {
                         alerts.trigger_alert(
                             "low_success_rate".to_string(),
                             AlertSeverity::Critical,
-                            format!("Success rate {:.1}% below threshold {:.1}%",
-                                   trading.success_rate.current_value * 100.0,
-                                   thresholds.min_success_rate * 100.0),
+                            format!(
+                                "Success rate {:.1}% below threshold {:.1}%",
+                                trading.success_rate.current_value * 100.0,
+                                thresholds.min_success_rate * 100.0
+                            ),
                         );
                     }
                 }
@@ -365,12 +382,23 @@ impl MetricsDashboard {
                 {
                     let latency = latency_metrics.lock().unwrap();
                     println!("⚡ LATENCY METRICS:");
-                    println!("  • Detection:      {:.1}μs avg", latency.detection_latency_us.current_value);
-                    println!("  • Execution:      {:.1}ms avg", latency.execution_latency_ms.current_value);
-                    println!("  • End-to-End:     {:.1}ms avg (P99: {:.1}ms)",
-                             latency.end_to_end_latency_ms.current_value,
-                             latency.current_percentiles.p99_ms);
-                    println!("  • ShredStream:    {:.1}ms avg", latency.shredstream_latency_ms.current_value);
+                    println!(
+                        "  • Detection:      {:.1}μs avg",
+                        latency.detection_latency_us.current_value
+                    );
+                    println!(
+                        "  • Execution:      {:.1}ms avg",
+                        latency.execution_latency_ms.current_value
+                    );
+                    println!(
+                        "  • End-to-End:     {:.1}ms avg (P99: {:.1}ms)",
+                        latency.end_to_end_latency_ms.current_value,
+                        latency.current_percentiles.p99_ms
+                    );
+                    println!(
+                        "  • ShredStream:    {:.1}ms avg",
+                        latency.shredstream_latency_ms.current_value
+                    );
 
                     let status = if latency.current_percentiles.p99_ms < 15.0 {
                         "🔥 ELITE"
@@ -390,8 +418,14 @@ impl MetricsDashboard {
                 {
                     let trading = trading_metrics.lock().unwrap();
                     println!("💰 TRADING METRICS:");
-                    println!("  • Success Rate:   {:.1}%", trading.success_rate.current_value * 100.0);
-                    println!("  • Total P&L:      {:.3} SOL", trading.cumulative_profit_sol);
+                    println!(
+                        "  • Success Rate:   {:.1}%",
+                        trading.success_rate.current_value * 100.0
+                    );
+                    println!(
+                        "  • Total P&L:      {:.3} SOL",
+                        trading.cumulative_profit_sol
+                    );
                     println!("  • Daily P&L:      {:.3} SOL", trading.daily_pnl_sol);
                     println!("  • Best Trade:     {:.3} SOL", trading.best_trade_sol);
                     println!("  • Active Pos:     {}", trading.active_positions);
@@ -412,12 +446,23 @@ impl MetricsDashboard {
                 {
                     let performance = performance_metrics.lock().unwrap();
                     println!("🎯 PERFORMANCE METRICS:");
-                    println!("  • Tokens/sec:     {:.1}", performance.new_tokens_detected_per_second.current_value);
-                    println!("  • Opportunities:  {:.1}/min", performance.opportunities_per_minute.current_value);
-                    println!("  • Alpha Capture:  {:.1}%", performance.alpha_capture_rate.current_value * 100.0);
-                    println!("  • Competition:    Rank #{} vs {} bots",
-                             performance.competition_analysis.our_speed_rank,
-                             performance.competition_analysis.estimated_bot_count);
+                    println!(
+                        "  • Tokens/sec:     {:.1}",
+                        performance.new_tokens_detected_per_second.current_value
+                    );
+                    println!(
+                        "  • Opportunities:  {:.1}/min",
+                        performance.opportunities_per_minute.current_value
+                    );
+                    println!(
+                        "  • Alpha Capture:  {:.1}%",
+                        performance.alpha_capture_rate.current_value * 100.0
+                    );
+                    println!(
+                        "  • Competition:    Rank #{} vs {} bots",
+                        performance.competition_analysis.our_speed_rank,
+                        performance.competition_analysis.estimated_bot_count
+                    );
                 }
 
                 println!();
@@ -426,15 +471,30 @@ impl MetricsDashboard {
                 {
                     let system = system_metrics.lock().unwrap();
                     println!("🖥️  SYSTEM METRICS:");
-                    println!("  • CPU Usage:      {:.1}%", system.cpu_usage_percent.current_value);
-                    println!("  • Memory Usage:   {:.1} MB", system.memory_usage_mb.current_value);
-                    println!("  • Cache Hit Rate: {:.1}%", system.cache_hit_rate.current_value * 100.0);
-                    println!("  • SIMD Util:      {:.1}%", system.simd_utilization.current_value * 100.0);
+                    println!(
+                        "  • CPU Usage:      {:.1}%",
+                        system.cpu_usage_percent.current_value
+                    );
+                    println!(
+                        "  • Memory Usage:   {:.1} MB",
+                        system.memory_usage_mb.current_value
+                    );
+                    println!(
+                        "  • Cache Hit Rate: {:.1}%",
+                        system.cache_hit_rate.current_value * 100.0
+                    );
+                    println!(
+                        "  • SIMD Util:      {:.1}%",
+                        system.simd_utilization.current_value * 100.0
+                    );
                 }
 
                 println!();
                 println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                println!("Last updated: {}", chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC"));
+                println!(
+                    "Last updated: {}",
+                    chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC")
+                );
             }
         });
 
@@ -447,7 +507,6 @@ impl MetricsDashboard {
         Ok(())
     }
 
-
     /// Record latency measurement
     pub fn record_latency(&self, latency_type: LatencyType, value_ms: f64) {
         let timestamp = SystemTime::now()
@@ -459,19 +518,29 @@ impl MetricsDashboard {
 
         match latency_type {
             LatencyType::Detection => {
-                latency_metrics.detection_latency_us.add_point(timestamp, value_ms * 1000.0);
+                latency_metrics
+                    .detection_latency_us
+                    .add_point(timestamp, value_ms * 1000.0);
             }
             LatencyType::Execution => {
-                latency_metrics.execution_latency_ms.add_point(timestamp, value_ms);
+                latency_metrics
+                    .execution_latency_ms
+                    .add_point(timestamp, value_ms);
             }
             LatencyType::EndToEnd => {
-                latency_metrics.end_to_end_latency_ms.add_point(timestamp, value_ms);
+                latency_metrics
+                    .end_to_end_latency_ms
+                    .add_point(timestamp, value_ms);
             }
             LatencyType::ShredStream => {
-                latency_metrics.shredstream_latency_ms.add_point(timestamp, value_ms);
+                latency_metrics
+                    .shredstream_latency_ms
+                    .add_point(timestamp, value_ms);
             }
             LatencyType::JitoSubmission => {
-                latency_metrics.jito_submission_latency_ms.add_point(timestamp, value_ms);
+                latency_metrics
+                    .jito_submission_latency_ms
+                    .add_point(timestamp, value_ms);
             }
         }
     }
@@ -489,7 +558,9 @@ impl MetricsDashboard {
         trading_metrics.trades_executed.add_point(timestamp, 1);
 
         // Update P&L
-        trading_metrics.profit_loss_sol.add_point(timestamp, profit_sol);
+        trading_metrics
+            .profit_loss_sol
+            .add_point(timestamp, profit_sol);
         trading_metrics.cumulative_profit_sol += profit_sol;
 
         // Update daily P&L (simplified)
@@ -587,7 +658,10 @@ where
         }
 
         // Add new point
-        self.data.push_back(TimePoint { timestamp, value: value.clone() });
+        self.data.push_back(TimePoint {
+            timestamp,
+            value: value.clone(),
+        });
 
         // Update current value
         self.current_value = value.clone();
@@ -722,7 +796,12 @@ impl AlertSystem {
         }
     }
 
-    fn send_notification(&self, channel: &NotificationChannel, severity: &AlertSeverity, message: &str) {
+    fn send_notification(
+        &self,
+        channel: &NotificationChannel,
+        severity: &AlertSeverity,
+        message: &str,
+    ) {
         match channel {
             NotificationChannel::Console => {
                 let prefix = match severity {

@@ -2,7 +2,6 @@
 ///
 /// This module centralizes all magic numbers and configuration constants
 /// to improve code maintainability and reduce errors from inconsistent values.
-
 use std::time::Duration;
 
 // ============================================================================
@@ -66,7 +65,7 @@ pub const MINIMUM_REAL_RESERVES: u64 = 1_000_000;
 
 /// PumpFun instruction discriminators (TODO: Verify these are correct!)
 /// WARNING: These are placeholder values and must be validated against actual program
-pub const PUMPFUN_BUY_DISCRIMINATOR: u8 = 0x66;  // NEEDS VERIFICATION
+pub const PUMPFUN_BUY_DISCRIMINATOR: u8 = 0x66; // NEEDS VERIFICATION
 pub const PUMPFUN_SELL_DISCRIMINATOR: u8 = 0x33; // NEEDS VERIFICATION
 pub const PUMPFUN_CREATE_DISCRIMINATOR: u8 = 0x01; // NEEDS VERIFICATION
 
@@ -138,9 +137,9 @@ pub const MAX_JITO_TIP_LAMPORTS: u64 = 5_000_000; // 0.005 SOL
 pub const JITO_TIP_BASELINE_PERCENTILE: u8 = 99;
 
 /// JITO tip scaling factors
-pub const JITO_TIP_SCALE_HIGH_MARGIN: f64 = 3.0;  // <5% fee ratio
-pub const JITO_TIP_SCALE_MED_MARGIN: f64 = 2.0;   // 5-10% fee ratio
-pub const JITO_TIP_SCALE_LOW_MARGIN: f64 = 1.0;   // >10% fee ratio
+pub const JITO_TIP_SCALE_HIGH_MARGIN: f64 = 3.0; // <5% fee ratio
+pub const JITO_TIP_SCALE_MED_MARGIN: f64 = 2.0; // 5-10% fee ratio
+pub const JITO_TIP_SCALE_LOW_MARGIN: f64 = 1.0; // >10% fee ratio
 
 /// JITO tip floor refresh interval (minutes)
 pub const JITO_TIP_REFRESH_MINUTES: u64 = 10;

@@ -1,11 +1,7 @@
+use crate::token_decimal_cache::{calculate_adjusted_price, TokenDecimalCache};
 use chrono::{DateTime, Utc};
-use solana_sdk::{
-    message::VersionedMessage,
-    pubkey::Pubkey,
-    transaction::VersionedTransaction,
-};
+use solana_sdk::{message::VersionedMessage, pubkey::Pubkey, transaction::VersionedTransaction};
 use std::str::FromStr;
-use crate::token_decimal_cache::{TokenDecimalCache, calculate_adjusted_price};
 use tracing::warn;
 
 /// Safe string truncation to prevent panics on short strings
@@ -24,7 +20,7 @@ pub struct SwapInfo {
     pub pool_address: String,
     pub amount_in: u64,
     pub amount_out: u64,
-    pub price_sol: f64,  // Decimal-adjusted price
+    pub price_sol: f64, // Decimal-adjusted price
     pub is_buy: bool,
     pub timestamp: DateTime<Utc>,
     pub user_wallet: String,
@@ -51,8 +47,7 @@ impl DexSwapParser {
         // Helper macro to parse pubkey with better error messages
         macro_rules! parse_pubkey {
             ($addr:expr) => {
-                Pubkey::from_str($addr)
-                    .map_err(|e| format!("Invalid pubkey '{}': {}", $addr, e))?
+                Pubkey::from_str($addr).map_err(|e| format!("Invalid pubkey '{}': {}", $addr, e))?
             };
         }
 
@@ -150,13 +145,15 @@ impl DexSwapParser {
                     if instruction.data.len() >= 8 {
                         let discriminator = &instruction.data[0..8];
                         if discriminator == dex_info.swap_discriminator.as_slice() {
-                            return self.parse_swap_instruction(
-                                account_keys,
-                                instruction,
-                                &dex_info.name,
-                                &signature,
-                                slot,
-                            ).await;
+                            return self
+                                .parse_swap_instruction(
+                                    account_keys,
+                                    instruction,
+                                    &dex_info.name,
+                                    &signature,
+                                    slot,
+                                )
+                                .await;
                         }
                     }
                 }
@@ -221,17 +218,26 @@ impl DexSwapParser {
 
         // CRITICAL FIX: Fetch token decimals for accurate price calculations
         // Without this, prices are wrong by 100x-1000x!
-        let decimals_in = self.decimal_cache.get_decimals(&token_mint).await.unwrap_or_else(|e| {
-            warn!("⚠️ Failed to fetch decimals for {}: {}, defaulting to 9", truncate_safe(&token_mint, 8), e);
-            9  // Default to SOL decimals if fetch fails
-        });
+        let decimals_in = self
+            .decimal_cache
+            .get_decimals(&token_mint)
+            .await
+            .unwrap_or_else(|e| {
+                warn!(
+                    "⚠️ Failed to fetch decimals for {}: {}, defaulting to 9",
+                    truncate_safe(&token_mint, 8),
+                    e
+                );
+                9 // Default to SOL decimals if fetch fails
+            });
 
         // SOL has 9 decimals - this is our base currency
         let decimals_out = 9;
 
         // Calculate decimal-adjusted price (the CRITICAL fix!)
         let price_sol = if amount_in > 0 && amount_out > 0 {
-            let adjusted_price = calculate_adjusted_price(amount_in, amount_out, decimals_in, decimals_out);
+            let adjusted_price =
+                calculate_adjusted_price(amount_in, amount_out, decimals_in, decimals_out);
 
             const MIN_REALISTIC_PRICE: f64 = 0.0000001;
             const MAX_REALISTIC_PRICE: f64 = 10_000.0;
@@ -256,7 +262,7 @@ impl DexSwapParser {
             pool_address,
             amount_in,
             amount_out,
-            price_sol,  // Now decimal-adjusted!
+            price_sol, // Now decimal-adjusted!
             is_buy,
             timestamp: Utc::now(),
             user_wallet,
@@ -265,4 +271,3 @@ impl DexSwapParser {
         })
     }
 }
-

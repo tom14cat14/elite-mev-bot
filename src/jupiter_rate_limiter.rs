@@ -8,10 +8,16 @@ use serde_json::Value;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::{sleep, Instant};
-use tracing::{debug, warn, error};
+use tracing::{debug, error, warn};
 
 pub struct JupiterRateLimiter {
-    limiter: Arc<RateLimiter<governor::state::NotKeyed, governor::state::InMemoryState, governor::clock::DefaultClock>>,
+    limiter: Arc<
+        RateLimiter<
+            governor::state::NotKeyed,
+            governor::state::InMemoryState,
+            governor::clock::DefaultClock,
+        >,
+    >,
     client: Client,
     api_key: String,
     burst_protection: Arc<Mutex<BurstProtector>>,
@@ -75,20 +81,25 @@ impl JupiterRateLimiter {
                     retry_count += 1;
 
                     if retry_count >= MAX_RETRIES {
-                        error!("Jupiter API request failed after {} retries: {}", MAX_RETRIES, e);
+                        error!(
+                            "Jupiter API request failed after {} retries: {}",
+                            MAX_RETRIES, e
+                        );
                         return Err(e);
                     }
 
                     // Check if it's a rate limit error
-                    let is_rate_limit_error = e.to_string().contains("429") ||
-                                            e.to_string().contains("rate limit") ||
-                                            e.to_string().contains("Too Many Requests");
+                    let is_rate_limit_error = e.to_string().contains("429")
+                        || e.to_string().contains("rate limit")
+                        || e.to_string().contains("Too Many Requests");
 
                     if is_rate_limit_error {
                         // Exponential backoff for rate limit errors
                         let backoff_ms = self.calculate_exponential_backoff(retry_count);
-                        warn!("Rate limit hit, backing off for {}ms (attempt {}/{})",
-                              backoff_ms, retry_count, MAX_RETRIES);
+                        warn!(
+                            "Rate limit hit, backing off for {}ms (attempt {}/{})",
+                            backoff_ms, retry_count, MAX_RETRIES
+                        );
                         sleep(Duration::from_millis(backoff_ms)).await;
 
                         // Update burst protection
@@ -100,8 +111,10 @@ impl JupiterRateLimiter {
                     } else {
                         // Regular exponential backoff for other errors
                         let backoff_ms = std::cmp::min(100 * (2_u64.pow(retry_count)), 5000);
-                        warn!("Jupiter API error, retrying in {}ms (attempt {}/{}): {}",
-                              backoff_ms, retry_count, MAX_RETRIES, e);
+                        warn!(
+                            "Jupiter API error, retrying in {}ms (attempt {}/{}): {}",
+                            backoff_ms, retry_count, MAX_RETRIES, e
+                        );
                         sleep(Duration::from_millis(backoff_ms)).await;
                     }
                 }
@@ -170,7 +183,11 @@ impl JupiterRateLimiter {
         } else {
             let status = response.status();
             let error_body = response.text().await.unwrap_or_default();
-            Err(anyhow::anyhow!("Jupiter API error {}: {}", status, error_body))
+            Err(anyhow::anyhow!(
+                "Jupiter API error {}: {}",
+                status,
+                error_body
+            ))
         }
     }
 

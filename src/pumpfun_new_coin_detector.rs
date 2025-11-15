@@ -1,16 +1,14 @@
 use anyhow::Result;
+use lru::LruCache;
+use serde::Serialize;
 use solana_sdk::pubkey::Pubkey;
 use std::collections::{HashMap, VecDeque};
-use std::time::{Duration, Instant};
 use std::sync::{Arc, RwLock};
-use serde::Serialize;
-use tracing::{info, debug};
-use lru::LruCache;
-
+use std::time::{Duration, Instant};
+use tracing::{debug, info};
 
 /// PumpFun program constants for ultra-fast detection
 pub mod pumpfun_constants {
-    
 
     // PumpFun program IDs (official PumpFun addresses)
     pub const PUMPFUN_PROGRAM_ID: &str = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
@@ -18,8 +16,8 @@ pub mod pumpfun_constants {
 
     // Instruction discriminators for fast pattern matching
     pub const CREATE_TOKEN_DISCRIMINATOR: &[u8] = &[0x01, 0x02, 0x03, 0x04]; // Placeholder
-    pub const BUY_TOKEN_DISCRIMINATOR: &[u8] = &[0x05, 0x06, 0x07, 0x08];    // Placeholder
-    pub const SELL_TOKEN_DISCRIMINATOR: &[u8] = &[0x09, 0x0a, 0x0b, 0x0c];   // Placeholder
+    pub const BUY_TOKEN_DISCRIMINATOR: &[u8] = &[0x05, 0x06, 0x07, 0x08]; // Placeholder
+    pub const SELL_TOKEN_DISCRIMINATOR: &[u8] = &[0x09, 0x0a, 0x0b, 0x0c]; // Placeholder
 
     // Bonding curve thresholds
     pub const BONDING_CURVE_COMPLETION_SOL: f64 = 92.8;
@@ -96,11 +94,11 @@ pub struct DetectorConfig {
 impl Default for DetectorConfig {
     fn default() -> Self {
         Self {
-            min_quality_score: 6.0,      // 6/10 minimum quality
+            min_quality_score: 6.0,         // 6/10 minimum quality
             max_detection_age_seconds: 300, // 5 minutes max age
             enable_risk_analysis: true,
             cache_size: 10_000,
-            velocity_window_seconds: 60,   // 1 minute velocity calculation
+            velocity_window_seconds: 60, // 1 minute velocity calculation
             prediction_confidence_threshold: 0.8,
         }
     }
@@ -121,10 +119,12 @@ impl Default for DetectionMetrics {
 
 impl PumpFunNewCoinDetector {
     pub fn new(config: DetectorConfig) -> Result<Self> {
-        let pumpfun_program_id = pumpfun_constants::PUMPFUN_PROGRAM_ID.parse()
+        let pumpfun_program_id = pumpfun_constants::PUMPFUN_PROGRAM_ID
+            .parse()
             .map_err(|e| anyhow::anyhow!("Invalid PumpFun program ID: {}", e))?;
 
-        let bonding_curve_program = pumpfun_constants::BONDING_CURVE_PROGRAM.parse()
+        let bonding_curve_program = pumpfun_constants::BONDING_CURVE_PROGRAM
+            .parse()
             .map_err(|e| anyhow::anyhow!("Invalid bonding curve program ID: {}", e))?;
 
         info!("🎯 Initializing PumpFun New Coin Detector");
@@ -162,7 +162,10 @@ impl PumpFunNewCoinDetector {
         // Attempt to deserialize as Entry
         match bincode::deserialize::<solana_entry::entry::Entry>(shred_data) {
             Ok(entry) => {
-                debug!("✅ Deserialized entry with {} transactions", entry.transactions.len());
+                debug!(
+                    "✅ Deserialized entry with {} transactions",
+                    entry.transactions.len()
+                );
 
                 // Process each transaction in the entry
                 for (tx_idx, versioned_tx) in entry.transactions.iter().enumerate() {
@@ -179,9 +182,9 @@ impl PumpFunNewCoinDetector {
                     };
 
                     // Check if PumpFun program is involved
-                    let has_pumpfun = account_keys.iter().any(|key| {
-                        key.to_string() == self.pumpfun_program_id.to_string()
-                    });
+                    let has_pumpfun = account_keys
+                        .iter()
+                        .any(|key| key.to_string() == self.pumpfun_program_id.to_string());
 
                     if has_pumpfun {
                         // Get instructions
@@ -203,17 +206,30 @@ impl PumpFunNewCoinDetector {
 
                         if is_create {
                             // Extract token mint (usually one of the first accounts)
-                            let token_mint = account_keys.get(2).map(|k| **k).unwrap_or(Pubkey::new_unique());
+                            let token_mint = account_keys
+                                .get(2)
+                                .map(|k| **k)
+                                .unwrap_or(Pubkey::new_unique());
 
-                            info!("🆕 NEW TOKEN DETECTED! Mint: {} (Entry tx {}/{})",
-                                  token_mint, tx_idx + 1, entry.transactions.len());
+                            info!(
+                                "🆕 NEW TOKEN DETECTED! Mint: {} (Entry tx {}/{})",
+                                token_mint,
+                                tx_idx + 1,
+                                entry.transactions.len()
+                            );
 
                             // Create NewTokenEvent for tracking
                             let new_token = NewTokenEvent {
                                 mint: token_mint,
-                                creator: account_keys.get(0).map(|k| **k).unwrap_or(Pubkey::new_unique()),
+                                creator: account_keys
+                                    .get(0)
+                                    .map(|k| **k)
+                                    .unwrap_or(Pubkey::new_unique()),
                                 initial_sol_raised: 0.0, // Will be tracked as buys come in
-                                bonding_curve_address: account_keys.get(3).map(|k| **k).unwrap_or(Pubkey::new_unique()),
+                                bonding_curve_address: account_keys
+                                    .get(3)
+                                    .map(|k| **k)
+                                    .unwrap_or(Pubkey::new_unique()),
                                 metadata_uri: None,
                                 name: Some(format!("PumpFun Token {}", tx_idx)),
                                 symbol: None,
@@ -246,14 +262,21 @@ impl PumpFunNewCoinDetector {
         }
 
         if !new_tokens.is_empty() {
-            info!("🎯 REAL DATA: Detected {} NEW token launches - starting 60s tracking", new_tokens.len());
+            info!(
+                "🎯 REAL DATA: Detected {} NEW token launches - starting 60s tracking",
+                new_tokens.len()
+            );
         }
 
         Ok(new_tokens)
     }
 
     /// Ultra-fast new token detection from ShredStream data
-    pub fn detect_new_tokens(&mut self, accounts: &[crate::AccountUpdate], slot: u64) -> Result<Vec<NewTokenEvent>> {
+    pub fn detect_new_tokens(
+        &mut self,
+        accounts: &[crate::AccountUpdate],
+        slot: u64,
+    ) -> Result<Vec<NewTokenEvent>> {
         let start_time = Instant::now();
         let mut new_tokens = Vec::new();
 
@@ -278,8 +301,10 @@ impl PumpFunNewCoinDetector {
                         // Cache the token
                         self.seen_tokens.put(event.mint, Instant::now());
 
-                        debug!("🆕 New token detected: {} (Quality: {:.1}/10)",
-                               event.mint, quality_score);
+                        debug!(
+                            "🆕 New token detected: {} (Quality: {:.1}/10)",
+                            event.mint, quality_score
+                        );
 
                         new_tokens.push(event);
                     }
@@ -301,8 +326,11 @@ impl PumpFunNewCoinDetector {
         }
 
         if !new_tokens.is_empty() {
-            info!("⚡ Detected {} new tokens in {:.2}μs",
-                  new_tokens.len(), processing_time_us);
+            info!(
+                "⚡ Detected {} new tokens in {:.2}μs",
+                new_tokens.len(),
+                processing_time_us
+            );
         }
 
         Ok(new_tokens)
@@ -312,13 +340,18 @@ impl PumpFunNewCoinDetector {
     #[inline(always)]
     fn is_pumpfun_related(&self, owner: &Pubkey) -> bool {
         // Fast Pubkey comparison for known PumpFun programs
-        *owner == self.pumpfun_program_id ||
-        *owner == self.bonding_curve_program ||
-        owner.to_string() == "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" // Token Program
+        *owner == self.pumpfun_program_id
+            || *owner == self.bonding_curve_program
+            || owner.to_string() == "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        // Token Program
     }
 
     /// SIMD-optimized parsing of potential new token creation
-    fn parse_potential_new_token(&self, account_update: &crate::AccountUpdate, slot: u64) -> Result<Option<NewTokenEvent>> {
+    fn parse_potential_new_token(
+        &self,
+        account_update: &crate::AccountUpdate,
+        slot: u64,
+    ) -> Result<Option<NewTokenEvent>> {
         let account_data = &account_update.account.data;
 
         // Fast pattern matching for token creation
@@ -335,7 +368,7 @@ impl PumpFunNewCoinDetector {
                     name: token_info.name,
                     detection_time: Instant::now(),
                     creation_slot: slot,
-                    quality_score: 0.0, // Will be calculated separately
+                    quality_score: 0.0,     // Will be calculated separately
                     risk_flags: Vec::new(), // Will be analyzed separately
                 };
 
@@ -357,13 +390,17 @@ impl PumpFunNewCoinDetector {
         unsafe {
             crate::simd_bincode::SimdBincode::fast_memcmp(
                 &data[0..4],
-                pumpfun_constants::CREATE_TOKEN_DISCRIMINATOR
+                pumpfun_constants::CREATE_TOKEN_DISCRIMINATOR,
             )
         }
     }
 
     /// Extract token information from account data
-    fn extract_token_info(&self, data: &[u8], account_update: &crate::AccountUpdate) -> Result<Option<TokenInfo>> {
+    fn extract_token_info(
+        &self,
+        data: &[u8],
+        account_update: &crate::AccountUpdate,
+    ) -> Result<Option<TokenInfo>> {
         // This would contain the actual PumpFun account data parsing logic
         // For now, return a placeholder structure
 
@@ -373,7 +410,10 @@ impl PumpFunNewCoinDetector {
         }
 
         // Simplified parsing - in production, this would parse the actual PumpFun account layout
-        let mint = account_update.pubkey.to_string().parse()
+        let mint = account_update
+            .pubkey
+            .to_string()
+            .parse()
             .map_err(|e| anyhow::anyhow!("Invalid mint pubkey: {}", e))?;
 
         let creator = mint; // Placeholder - extract actual creator
@@ -383,10 +423,10 @@ impl PumpFunNewCoinDetector {
             mint,
             creator,
             bonding_curve,
-            initial_sol: 0.1, // Extract from data
+            initial_sol: 0.1,   // Extract from data
             metadata_uri: None, // Extract from metadata
-            symbol: None, // Extract from metadata
-            name: None, // Extract from metadata
+            symbol: None,       // Extract from metadata
+            name: None,         // Extract from metadata
         }))
     }
 
@@ -451,7 +491,12 @@ impl PumpFunNewCoinDetector {
     }
 
     /// Update bonding curve state for existing tokens
-    pub fn update_bonding_curve_state(&self, mint: &Pubkey, sol_raised: f64, complete: bool) -> Result<()> {
+    pub fn update_bonding_curve_state(
+        &self,
+        mint: &Pubkey,
+        sol_raised: f64,
+        complete: bool,
+    ) -> Result<()> {
         let mut curves = self.bonding_curves.write().unwrap();
 
         if let Some(curve) = curves.get_mut(mint) {
@@ -461,18 +506,23 @@ impl PumpFunNewCoinDetector {
             curve.last_updated = Instant::now();
 
             // Calculate velocity
-            let time_diff = curve.last_updated.duration_since(
-                curve.last_updated - Duration::from_secs(self.config.velocity_window_seconds)
-            ).as_secs_f64();
+            let time_diff = curve
+                .last_updated
+                .duration_since(
+                    curve.last_updated - Duration::from_secs(self.config.velocity_window_seconds),
+                )
+                .as_secs_f64();
 
             if time_diff > 0.0 {
                 curve.velocity_sol_per_second = (sol_raised - previous_sol) / time_diff;
 
                 // Predict completion time if not complete
                 if !complete && curve.velocity_sol_per_second > 0.0 {
-                    let remaining_sol = pumpfun_constants::BONDING_CURVE_COMPLETION_SOL - sol_raised;
+                    let remaining_sol =
+                        pumpfun_constants::BONDING_CURVE_COMPLETION_SOL - sol_raised;
                     let eta_seconds = remaining_sol / curve.velocity_sol_per_second;
-                    curve.completion_prediction = Some(Instant::now() + Duration::from_secs_f64(eta_seconds));
+                    curve.completion_prediction =
+                        Some(Instant::now() + Duration::from_secs_f64(eta_seconds));
                 }
             }
         } else {
@@ -504,7 +554,9 @@ impl PumpFunNewCoinDetector {
 
     /// Get predicted completion time for bonding curve
     pub fn get_completion_prediction(&self, mint: &Pubkey) -> Option<Instant> {
-        self.bonding_curves.read().unwrap()
+        self.bonding_curves
+            .read()
+            .unwrap()
             .get(mint)
             .and_then(|curve| curve.completion_prediction)
     }
@@ -512,7 +564,8 @@ impl PumpFunNewCoinDetector {
     /// Check if token is close to bonding curve completion
     pub fn is_near_completion(&self, mint: &Pubkey, threshold_percentage: f64) -> bool {
         if let Some(curve) = self.bonding_curves.read().unwrap().get(mint) {
-            let completion_percentage = curve.current_sol_raised / pumpfun_constants::BONDING_CURVE_COMPLETION_SOL;
+            let completion_percentage =
+                curve.current_sol_raised / pumpfun_constants::BONDING_CURVE_COMPLETION_SOL;
             completion_percentage >= threshold_percentage
         } else {
             false

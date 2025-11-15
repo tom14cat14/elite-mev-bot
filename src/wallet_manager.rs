@@ -1,10 +1,5 @@
 use anyhow::Result;
-use solana_sdk::{
-    pubkey::Pubkey,
-    signature::Keypair,
-    signer::Signer,
-    transaction::Transaction,
-};
+use solana_sdk::{pubkey::Pubkey, signature::Keypair, signer::Signer, transaction::Transaction};
 use tracing::{debug, info, warn};
 
 /// Wallet management for trading operations
@@ -27,7 +22,10 @@ impl WalletManager {
 
         let main_wallet = Self::keypair_from_base58(&wallet_key)?;
 
-        info!("Wallet manager initialized - Main wallet: {}", main_wallet.pubkey());
+        info!(
+            "Wallet manager initialized - Main wallet: {}",
+            main_wallet.pubkey()
+        );
         info!("Paper trading mode: {}", paper_trading);
 
         Ok(Self {
@@ -39,7 +37,10 @@ impl WalletManager {
 
     /// Create new wallet manager with specific keypair
     pub fn new(main_wallet: Keypair, paper_trading: bool) -> Self {
-        info!("Wallet manager initialized - Main wallet: {}", main_wallet.pubkey());
+        info!(
+            "Wallet manager initialized - Main wallet: {}",
+            main_wallet.pubkey()
+        );
 
         Self {
             main_wallet,
@@ -106,7 +107,10 @@ impl WalletManager {
             .map_err(|e| anyhow::anyhow!("Failed to decode base58 private key: {}", e))?;
 
         if decoded.len() != 64 {
-            return Err(anyhow::anyhow!("Invalid private key length: expected 64 bytes, got {}", decoded.len()));
+            return Err(anyhow::anyhow!(
+                "Invalid private key length: expected 64 bytes, got {}",
+                decoded.len()
+            ));
         }
 
         Keypair::from_bytes(&decoded)

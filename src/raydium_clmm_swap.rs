@@ -3,19 +3,20 @@
 //! Builds swap instructions for Raydium CLMM pools to enable sandwich attacks.
 //! Reference: https://github.com/raydium-io/raydium-clmm
 
+use crate::raydium_clmm_state::RaydiumClmmPoolState;
 use anyhow::{anyhow, Result};
 use solana_sdk::{
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
 };
 use std::str::FromStr;
-use crate::raydium_clmm_state::RaydiumClmmPoolState;
 
 /// Raydium CLMM program ID
 pub const RAYDIUM_CLMM_PROGRAM_ID: &str = "CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK";
 
 /// Raydium CLMM swap instruction discriminator (Anchor: sha256("global:swap")[:8])
-pub const SWAP_INSTRUCTION_DISCRIMINATOR: [u8; 8] = [0xf8, 0xc6, 0x9e, 0x91, 0xe1, 0x75, 0x87, 0xc8];
+pub const SWAP_INSTRUCTION_DISCRIMINATOR: [u8; 8] =
+    [0xf8, 0xc6, 0x9e, 0x91, 0xe1, 0x75, 0x87, 0xc8];
 
 /// Build a Raydium CLMM swap instruction
 ///

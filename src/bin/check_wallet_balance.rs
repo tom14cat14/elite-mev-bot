@@ -1,11 +1,6 @@
 use anyhow::Result;
 use solana_rpc_client::rpc_client::RpcClient;
-use solana_sdk::{
-    pubkey::Pubkey,
-    signature::Keypair,
-    signer::Signer,
-};
-use std::str::FromStr;
+use solana_sdk::{signature::Keypair, signer::Signer};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -29,7 +24,10 @@ async fn main() -> Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to decode private key: {}", e))?;
 
     if decoded.len() != 64 {
-        return Err(anyhow::anyhow!("Invalid private key length: expected 64 bytes, got {}", decoded.len()));
+        return Err(anyhow::anyhow!(
+            "Invalid private key length: expected 64 bytes, got {}",
+            decoded.len()
+        ));
     }
 
     let keypair = Keypair::from_bytes(&decoded)
@@ -48,14 +46,23 @@ async fn main() -> Result<()> {
     match rpc_client.get_balance(&wallet_pubkey) {
         Ok(balance_lamports) => {
             let balance_sol = balance_lamports as f64 / 1_000_000_000.0;
-            println!("💰 SOL Balance: {:.9} SOL ({} lamports)", balance_sol, balance_lamports);
+            println!(
+                "💰 SOL Balance: {:.9} SOL ({} lamports)",
+                balance_sol, balance_lamports
+            );
 
             // Check if we have sufficient capital
             let required_capital = 4.0; // From .env config
             if balance_sol >= required_capital {
-                println!("✅ SUFFICIENT CAPITAL: {:.3} SOL >= {:.1} SOL required", balance_sol, required_capital);
+                println!(
+                    "✅ SUFFICIENT CAPITAL: {:.3} SOL >= {:.1} SOL required",
+                    balance_sol, required_capital
+                );
             } else {
-                println!("⚠️  INSUFFICIENT CAPITAL: {:.3} SOL < {:.1} SOL required", balance_sol, required_capital);
+                println!(
+                    "⚠️  INSUFFICIENT CAPITAL: {:.3} SOL < {:.1} SOL required",
+                    balance_sol, required_capital
+                );
                 println!("   Need to add: {:.3} SOL", required_capital - balance_sol);
             }
         }
@@ -77,8 +84,22 @@ async fn main() -> Result<()> {
         .unwrap_or(true);
 
     println!("\n⚙️  Trading Configuration:");
-    println!("   Real Trading: {}", if enable_real_trading { "✅ ENABLED" } else { "🔒 DISABLED" });
-    println!("   Paper Trading: {}", if paper_trading { "📝 ENABLED" } else { "❌ DISABLED" });
+    println!(
+        "   Real Trading: {}",
+        if enable_real_trading {
+            "✅ ENABLED"
+        } else {
+            "🔒 DISABLED"
+        }
+    );
+    println!(
+        "   Paper Trading: {}",
+        if paper_trading {
+            "📝 ENABLED"
+        } else {
+            "❌ DISABLED"
+        }
+    );
 
     if !enable_real_trading && paper_trading {
         println!("🛡️  SAFE MODE: Bot will simulate trades without spending real SOL");

@@ -160,10 +160,18 @@ impl OrcaWhirlpoolState {
 
         let (start_0, start_1, start_2) = if a_to_b {
             // Swapping A→B (price decreasing), need lower ticks
-            (current_start, current_start - ticks_in_array, current_start - 2 * ticks_in_array)
+            (
+                current_start,
+                current_start - ticks_in_array,
+                current_start - 2 * ticks_in_array,
+            )
         } else {
             // Swapping B→A (price increasing), need higher ticks
-            (current_start, current_start + ticks_in_array, current_start + 2 * ticks_in_array)
+            (
+                current_start,
+                current_start + ticks_in_array,
+                current_start + 2 * ticks_in_array,
+            )
         };
 
         let tick_array_0 = Self::derive_tick_array_pda(&program_id, &self.whirlpool, start_0)?;
@@ -174,7 +182,11 @@ impl OrcaWhirlpoolState {
     }
 
     /// Derive a tick array PDA
-    fn derive_tick_array_pda(program_id: &Pubkey, whirlpool: &Pubkey, start_index: i32) -> Result<Pubkey> {
+    fn derive_tick_array_pda(
+        program_id: &Pubkey,
+        whirlpool: &Pubkey,
+        start_index: i32,
+    ) -> Result<Pubkey> {
         let seeds = &[
             b"tick_array",
             whirlpool.as_ref(),

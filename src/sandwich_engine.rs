@@ -10,14 +10,14 @@ use solana_sdk::{
 };
 use std::str::FromStr;
 use std::time::Instant;
-use tracing::{debug, info, error, warn};
+use tracing::{debug, error, info, warn};
 
-use crate::dex_registry::{DexRegistry, DexInfo};
+use crate::dex_registry::{DexInfo, DexRegistry};
 use crate::dynamic_fee_model::DynamicFeeModel;
-use crate::jupiter_executor::JupiterExecutor;
-use crate::pumpfun_executor::{PumpFunExecutor, PumpFunSwapParams};
-use crate::migration_manager::MigrationManager;
 use crate::jito_bundle_manager::JitoBundleManager;
+use crate::jupiter_executor::JupiterExecutor;
+use crate::migration_manager::MigrationManager;
+use crate::pumpfun_executor::{PumpFunExecutor, PumpFunSwapParams};
 use crate::wallet_manager::WalletManager;
 
 // Raydium AMM V4 program ID
@@ -29,7 +29,7 @@ const ORCA_WHIRLPOOLS_PROGRAM_ID: &str = "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3u
 // Borsh-serializable struct for Raydium swap instruction data
 #[derive(BorshSerialize, BorshDeserialize, Debug)]
 struct RaydiumSwapInstructionData {
-    pub discriminant: u8,  // Always 9 for swap
+    pub discriminant: u8, // Always 9 for swap
     pub amount_in: u64,
     pub minimum_amount_out: u64,
 }
@@ -37,7 +37,7 @@ struct RaydiumSwapInstructionData {
 // Borsh-serializable struct for Orca Whirlpools swap instruction data
 #[derive(BorshSerialize, BorshDeserialize, Debug)]
 struct OrcaWhirlpoolsSwapInstructionData {
-    pub discriminant: u8,  // Always 6 for swap
+    pub discriminant: u8, // Always 6 for swap
     pub amount: u64,
     pub other_amount_threshold: u64,
     pub sqrt_price_limit: u128,
@@ -103,7 +103,7 @@ pub struct TradeParams {
     pub slippage_bps: u16,
     pub dex_name: String,
     pub estimated_gas: u64,
-    pub pool_address: String,  // Added: Raydium/Orca pool address for DEX-specific routing
+    pub pool_address: String, // Added: Raydium/Orca pool address for DEX-specific routing
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -172,33 +172,45 @@ impl SandwichEngine {
         let dex_info = match self.dex_registry.get_dex_by_name(&victim_tx.dex_program_id) {
             Some(dex) if dex.supports_sandwich => dex,
             _ => {
-                debug!("DEX {} doesn't support sandwich attacks", victim_tx.dex_program_id);
+                debug!(
+                    "DEX {} doesn't support sandwich attacks",
+                    victim_tx.dex_program_id
+                );
                 return Ok(None);
             }
         };
 
         // Calculate sandwich opportunity
-        let opportunity = self.calculate_sandwich_opportunity(victim_tx, dex_info).await?;
+        let opportunity = self
+            .calculate_sandwich_opportunity(victim_tx, dex_info)
+            .await?;
 
         if let Some(opp) = &opportunity {
             // Validate profitability
             if opp.estimated_profit_sol < self.min_profit_sol {
-                debug!("Opportunity {} below minimum profit threshold: {:.4} SOL",
-                       opp.opportunity_id, opp.estimated_profit_sol);
+                debug!(
+                    "Opportunity {} below minimum profit threshold: {:.4} SOL",
+                    opp.opportunity_id, opp.estimated_profit_sol
+                );
                 return Ok(None);
             }
 
             // Validate position size
             if opp.front_run_params.amount > (self.max_position_size_sol * 1_000_000_000.0) as u64 {
-                debug!("Opportunity {} exceeds maximum position size", opp.opportunity_id);
+                debug!(
+                    "Opportunity {} exceeds maximum position size",
+                    opp.opportunity_id
+                );
                 return Ok(None);
             }
 
             self.stats.opportunities_detected += 1;
             let analysis_time = start_time.elapsed().as_millis();
 
-            info!("🎯 Sandwich opportunity detected in {}ms: {:.4} SOL profit ({})",
-                  analysis_time, opp.estimated_profit_sol, opp.opportunity_id);
+            info!(
+                "🎯 Sandwich opportunity detected in {}ms: {:.4} SOL profit ({})",
+                analysis_time, opp.estimated_profit_sol, opp.opportunity_id
+            );
         }
 
         Ok(opportunity)
@@ -216,28 +228,38 @@ impl SandwichEngine {
         info!("🥪 Executing sandwich attack: {}", opportunity_id);
 
         // Build front-run instructions
-        let front_run_instructions = self.build_trade_instructions(
-            &opportunity.front_run_params,
-            &self.wallet_manager.get_main_keypair().pubkey(),
-        ).await?;
+        let front_run_instructions = self
+            .build_trade_instructions(
+                &opportunity.front_run_params,
+                &self.wallet_manager.get_main_keypair().pubkey(),
+            )
+            .await?;
 
         // Build back-run instructions
-        let back_run_instructions = self.build_trade_instructions(
-            &opportunity.back_run_params,
-            &self.wallet_manager.get_main_keypair().pubkey(),
-        ).await?;
+        let back_run_instructions = self
+            .build_trade_instructions(
+                &opportunity.back_run_params,
+                &self.wallet_manager.get_main_keypair().pubkey(),
+            )
+            .await?;
 
         // Create atomic bundle
-        let bundle = self.bundle_manager.create_sandwich_bundle(
-            front_run_instructions,
-            opportunity.victim_transaction.signature.clone(),
-            back_run_instructions,
-            self.wallet_manager.get_main_keypair(),
-            recent_blockhash,
-        ).await?;
+        let bundle = self
+            .bundle_manager
+            .create_sandwich_bundle(
+                front_run_instructions,
+                opportunity.victim_transaction.signature.clone(),
+                back_run_instructions,
+                self.wallet_manager.get_main_keypair(),
+                recent_blockhash,
+            )
+            .await?;
 
-        info!("📦 Bundle created in {}ms: {}",
-              start_time.elapsed().as_millis(), bundle.bundle_id);
+        info!(
+            "📦 Bundle created in {}ms: {}",
+            start_time.elapsed().as_millis(),
+            bundle.bundle_id
+        );
 
         // Submit bundle to Jito
         match self.bundle_manager.submit_bundle(&bundle).await {
@@ -248,11 +270,15 @@ impl SandwichEngine {
 
                 // Update average execution time
                 let total_executions = self.stats.opportunities_executed as f64;
-                self.stats.average_execution_time_ms =
-                    (self.stats.average_execution_time_ms * (total_executions - 1.0) + execution_time as f64) / total_executions;
+                self.stats.average_execution_time_ms = (self.stats.average_execution_time_ms
+                    * (total_executions - 1.0)
+                    + execution_time as f64)
+                    / total_executions;
 
-                info!("✅ Sandwich executed successfully in {}ms: {} -> Jito: {}",
-                      execution_time, opportunity_id, jito_bundle_id);
+                info!(
+                    "✅ Sandwich executed successfully in {}ms: {} -> Jito: {}",
+                    execution_time, opportunity_id, jito_bundle_id
+                );
 
                 Ok(SandwichExecution {
                     opportunity_id,
@@ -269,8 +295,10 @@ impl SandwichEngine {
                 let execution_time = start_time.elapsed().as_millis() as u64;
                 self.stats.failed_executions += 1;
 
-                error!("❌ Sandwich execution failed in {}ms: {} - {}",
-                       execution_time, opportunity_id, e);
+                error!(
+                    "❌ Sandwich execution failed in {}ms: {} - {}",
+                    execution_time, opportunity_id, e
+                );
 
                 Ok(SandwichExecution {
                     opportunity_id,
@@ -289,22 +317,26 @@ impl SandwichEngine {
     /// Parse victim transaction from ShredStream data
     fn parse_victim_transaction(&self, tx_data: &Value) -> Result<VictimTransaction> {
         // This is a simplified parser - in production you'd parse actual Solana transaction data
-        let signature = tx_data.get("signature")
+        let signature = tx_data
+            .get("signature")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing signature"))?;
 
-        let user_wallet = tx_data.get("accounts")
+        let user_wallet = tx_data
+            .get("accounts")
             .and_then(|v| v.get(0))
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing user wallet"))?;
 
-        let instructions = tx_data.get("instructions")
+        let instructions = tx_data
+            .get("instructions")
             .and_then(|v| v.as_array())
             .ok_or_else(|| anyhow::anyhow!("Missing instructions"))?;
 
         // Find swap instruction
         for instruction in instructions {
-            let program_id = instruction.get("programId")
+            let program_id = instruction
+                .get("programId")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
 
@@ -315,7 +347,7 @@ impl SandwichEngine {
                     user_wallet: user_wallet.to_string(),
                     input_mint: "So11111111111111111111111111111111111111112".to_string(), // SOL (example)
                     output_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(), // USDC (example)
-                    amount: 1_000_000_000, // 1 SOL (example)
+                    amount: 1_000_000_000,    // 1 SOL (example)
                     slippage_tolerance: 0.01, // 1% (example)
                     dex_program_id: program_id.to_string(),
                     estimated_price_impact: 0.02, // 2% (example)
@@ -333,28 +365,28 @@ impl SandwichEngine {
         dex_info: &DexInfo,
     ) -> Result<Option<SandwichOpportunity>> {
         // Calculate optimal front-run size (typically 1-5x victim size)
-        let optimal_front_run_size = self.calculate_optimal_front_run_size(
-            victim_tx.amount,
-            victim_tx.estimated_price_impact,
-        );
+        let optimal_front_run_size = self
+            .calculate_optimal_front_run_size(victim_tx.amount, victim_tx.estimated_price_impact);
 
         // Check if we have enough balance
         let balance_info = self.wallet_manager.get_balance_info().await?;
         if optimal_front_run_size > (balance_info.sol_balance * 0.8 * 1_000_000_000.0) as u64 {
-            debug!("Insufficient balance for front-run: need {} SOL, have {} SOL",
-                   optimal_front_run_size as f64 / 1_000_000_000.0, balance_info.sol_balance);
+            debug!(
+                "Insufficient balance for front-run: need {} SOL, have {} SOL",
+                optimal_front_run_size as f64 / 1_000_000_000.0,
+                balance_info.sol_balance
+            );
             return Ok(None);
         }
 
         // Calculate expected profit
-        let estimated_profit = self.calculate_expected_profit(
-            &victim_tx,
-            optimal_front_run_size,
-            dex_info,
-        )?;
+        let estimated_profit =
+            self.calculate_expected_profit(&victim_tx, optimal_front_run_size, dex_info)?;
 
         // Validate with fee model
-        let fee_calculation = self.fee_model.calculate_fees(estimated_profit, dex_info.fee_rate)?;
+        let fee_calculation = self
+            .fee_model
+            .calculate_fees(estimated_profit, dex_info.fee_rate)?;
         if !fee_calculation.should_execute {
             return Ok(None);
         }
@@ -392,7 +424,11 @@ impl SandwichEngine {
     }
 
     /// Calculate optimal front-run size based on victim transaction
-    fn calculate_optimal_front_run_size(&self, victim_amount: u64, victim_price_impact: f64) -> u64 {
+    fn calculate_optimal_front_run_size(
+        &self,
+        victim_amount: u64,
+        victim_price_impact: f64,
+    ) -> u64 {
         // Use 2-3x victim size for optimal profit extraction
         let multiplier = if victim_price_impact > 0.05 { 2.0 } else { 3.0 };
         (victim_amount as f64 * multiplier) as u64
@@ -407,7 +443,8 @@ impl SandwichEngine {
     ) -> Result<f64> {
         // Simplified profit calculation
         // In production, this would use real price data and slippage models
-        let price_impact_profit = victim_tx.estimated_price_impact * front_run_size as f64 / 1_000_000_000.0;
+        let price_impact_profit =
+            victim_tx.estimated_price_impact * front_run_size as f64 / 1_000_000_000.0;
         let fees = (front_run_size as f64 / 1_000_000_000.0) * dex_info.fee_rate * 2.0; // Two trades
         Ok(price_impact_profit - fees)
     }
@@ -417,13 +454,19 @@ impl SandwichEngine {
         let mut score: f64 = 0.7; // Base confidence
 
         // Higher confidence for larger transactions
-        if victim_tx.amount > 10_000_000_000 { score += 0.1; } // >10 SOL
+        if victim_tx.amount > 10_000_000_000 {
+            score += 0.1;
+        } // >10 SOL
 
         // Higher confidence for low-slippage DEXs
-        if dex_info.typical_slippage < 0.002 { score += 0.1; }
+        if dex_info.typical_slippage < 0.002 {
+            score += 0.1;
+        }
 
         // Lower confidence for high price impact
-        if victim_tx.estimated_price_impact > 0.05 { score -= 0.2; }
+        if victim_tx.estimated_price_impact > 0.05 {
+            score -= 0.2;
+        }
 
         score.min(1.0).max(0.1)
     }
@@ -447,26 +490,38 @@ impl SandwichEngine {
     ) -> Result<Vec<Instruction>> {
         // Check if this is a Raydium trade
         if trade_params.dex_name.starts_with("Raydium") {
-            info!("🚀 Routing to Raydium AMM V4 for pool: {}", trade_params.pool_address);
-            return self.build_raydium_trade_instructions(trade_params, wallet_pubkey).await;
+            info!(
+                "🚀 Routing to Raydium AMM V4 for pool: {}",
+                trade_params.pool_address
+            );
+            return self
+                .build_raydium_trade_instructions(trade_params, wallet_pubkey)
+                .await;
         }
 
         // Check if this is an Orca Whirlpools trade
         if trade_params.dex_name.starts_with("Orca") {
-            info!("🌊 Routing to Orca Whirlpools for pool: {}", trade_params.pool_address);
-            return self.build_orca_trade_instructions(trade_params, wallet_pubkey).await;
+            info!(
+                "🌊 Routing to Orca Whirlpools for pool: {}",
+                trade_params.pool_address
+            );
+            return self
+                .build_orca_trade_instructions(trade_params, wallet_pubkey)
+                .await;
         }
 
         // CRITICAL: Check if this is a PumpFun token (pre-migration)
         let is_pumpfun_token = self.is_pumpfun_trade(trade_params).await?;
 
         if is_pumpfun_token {
-            info!("🎯 Routing to PumpFun executor for pre-migration token: {}",
-                  if trade_params.input_mint == "So11111111111111111111111111111111111111112" {
-                      &trade_params.output_mint  // SOL->Token (buy)
-                  } else {
-                      &trade_params.input_mint   // Token->SOL (sell)
-                  });
+            info!(
+                "🎯 Routing to PumpFun executor for pre-migration token: {}",
+                if trade_params.input_mint == "So11111111111111111111111111111111111111112" {
+                    &trade_params.output_mint // SOL->Token (buy)
+                } else {
+                    &trade_params.input_mint // Token->SOL (sell)
+                }
+            );
 
             return self.build_pumpfun_trade_instructions(trade_params).await;
         }
@@ -486,13 +541,11 @@ impl SandwichEngine {
 
         // For now, return simplified instruction
         // In production, this would build real Jupiter swap instructions
-        Ok(vec![
-            solana_sdk::system_instruction::transfer(
-                wallet_pubkey,
-                wallet_pubkey,
-                trade_params.amount,
-            ),
-        ])
+        Ok(vec![solana_sdk::system_instruction::transfer(
+            wallet_pubkey,
+            wallet_pubkey,
+            trade_params.amount,
+        )])
     }
 
     /// Build PumpFun-specific trade instructions using bonding curve
@@ -503,18 +556,20 @@ impl SandwichEngine {
         // Determine if this is a buy (SOL->Token) or sell (Token->SOL)
         let sol_mint = "So11111111111111111111111111111111111111112";
         let (token_mint, is_buy) = if trade_params.input_mint == sol_mint {
-            (&trade_params.output_mint, true)   // SOL->Token = buy
+            (&trade_params.output_mint, true) // SOL->Token = buy
         } else {
-            (&trade_params.input_mint, false)   // Token->SOL = sell
+            (&trade_params.input_mint, false) // Token->SOL = sell
         };
 
         // Calculate minimum amount out based on slippage
         let minimum_amount_out = if is_buy {
             // For SOL->Token, we expect tokens out, apply slippage protection
-            (trade_params.amount as f64 * (10000 - trade_params.slippage_bps as u32) as f64 / 10000.0) as u64
+            (trade_params.amount as f64 * (10000 - trade_params.slippage_bps as u32) as f64
+                / 10000.0) as u64
         } else {
             // For Token->SOL, we expect SOL out, apply slippage protection
-            (trade_params.amount as f64 * (10000 - trade_params.slippage_bps as u32) as f64 / 10000.0) as u64
+            (trade_params.amount as f64 * (10000 - trade_params.slippage_bps as u32) as f64
+                / 10000.0) as u64
         };
 
         // Create PumpFun swap parameters
@@ -527,14 +582,22 @@ impl SandwichEngine {
         };
 
         // Get bonding curve state to build instruction
-        let bonding_curve_state = self.pumpfun_executor.get_bonding_curve_state(token_mint).await
+        let bonding_curve_state = self
+            .pumpfun_executor
+            .get_bonding_curve_state(token_mint)
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to get bonding curve state: {}", e))?;
 
         // Build the actual PumpFun swap instruction
-        let instruction = self.pumpfun_executor.create_swap_instruction(&pumpfun_params, &bonding_curve_state)?;
+        let instruction = self
+            .pumpfun_executor
+            .create_swap_instruction(&pumpfun_params, &bonding_curve_state)?;
 
-        debug!("Built PumpFun {} instruction for {} tokens",
-               if is_buy { "buy" } else { "sell" }, token_mint);
+        debug!(
+            "Built PumpFun {} instruction for {} tokens",
+            if is_buy { "buy" } else { "sell" },
+            token_mint
+        );
 
         Ok(vec![instruction])
     }
@@ -551,12 +614,13 @@ impl SandwichEngine {
             .map_err(|_| anyhow::anyhow!("Invalid Raydium pool address"))?;
 
         // Calculate minimum amount out based on slippage
-        let minimum_amount_out = ((trade_params.amount as f64) *
-            (10000 - trade_params.slippage_bps as u32) as f64 / 10000.0) as u64;
+        let minimum_amount_out = ((trade_params.amount as f64)
+            * (10000 - trade_params.slippage_bps as u32) as f64
+            / 10000.0) as u64;
 
         // Build instruction data
         let instruction_data = RaydiumSwapInstructionData {
-            discriminant: 9,  // Swap instruction
+            discriminant: 9, // Swap instruction
             amount_in: trade_params.amount,
             minimum_amount_out,
         };
@@ -586,8 +650,10 @@ impl SandwichEngine {
             data,
         };
 
-        info!("Built Raydium swap instruction: pool={}, amount_in={}, min_out={}",
-              trade_params.pool_address, trade_params.amount, minimum_amount_out);
+        info!(
+            "Built Raydium swap instruction: pool={}, amount_in={}, min_out={}",
+            trade_params.pool_address, trade_params.amount, minimum_amount_out
+        );
 
         Ok(vec![instruction])
     }
@@ -604,8 +670,9 @@ impl SandwichEngine {
             .map_err(|_| anyhow::anyhow!("Invalid Orca pool address"))?;
 
         // Calculate minimum amount out based on slippage
-        let minimum_amount_out = ((trade_params.amount as f64) *
-            (10000 - trade_params.slippage_bps as u32) as f64 / 10000.0) as u64;
+        let minimum_amount_out = ((trade_params.amount as f64)
+            * (10000 - trade_params.slippage_bps as u32) as f64
+            / 10000.0) as u64;
 
         // Determine swap direction (a_to_b) based on mint ordering
         // LOOP 2 simplification: Use lexicographic ordering
@@ -614,10 +681,10 @@ impl SandwichEngine {
 
         // Build instruction data
         let instruction_data = OrcaWhirlpoolsSwapInstructionData {
-            discriminant: 6,  // Swap instruction
+            discriminant: 6, // Swap instruction
             amount: trade_params.amount,
             other_amount_threshold: minimum_amount_out,
-            sqrt_price_limit: 0,  // No price limit for LOOP 2
+            sqrt_price_limit: 0, // No price limit for LOOP 2
             amount_specified_is_input: true,
             a_to_b,
         };
@@ -647,8 +714,10 @@ impl SandwichEngine {
             data,
         };
 
-        info!("Built Orca swap instruction: pool={}, amount={}, min_out={}, a_to_b={}",
-              trade_params.pool_address, trade_params.amount, minimum_amount_out, a_to_b);
+        info!(
+            "Built Orca swap instruction: pool={}, amount={}, min_out={}, a_to_b={}",
+            trade_params.pool_address, trade_params.amount, minimum_amount_out, a_to_b
+        );
 
         Ok(vec![instruction])
     }
@@ -659,9 +728,9 @@ impl SandwichEngine {
 
         // Get the token mint (non-SOL side of the trade)
         let token_mint = if trade_params.input_mint == sol_mint {
-            &trade_params.output_mint  // SOL->Token trade
+            &trade_params.output_mint // SOL->Token trade
         } else if trade_params.output_mint == sol_mint {
-            &trade_params.input_mint   // Token->SOL trade
+            &trade_params.input_mint // Token->SOL trade
         } else {
             // Token->Token trade, check both sides (unlikely for PumpFun)
             return Ok(false);
@@ -672,22 +741,27 @@ impl SandwichEngine {
             Ok(is_migrated) => Ok(!is_migrated), // PumpFun if not migrated
             Err(_) => {
                 // If we can't check migration status, assume migrated (use Jupiter)
-                debug!("Could not check migration status for {}, assuming migrated", token_mint);
+                debug!(
+                    "Could not check migration status for {}, assuming migrated",
+                    token_mint
+                );
                 Ok(false)
             }
         }
     }
 
     /// Convert route data to Solana instructions
-    fn route_to_instructions(&self, route_data: &Value, wallet_pubkey: &Pubkey) -> Result<Vec<Instruction>> {
+    fn route_to_instructions(
+        &self,
+        route_data: &Value,
+        wallet_pubkey: &Pubkey,
+    ) -> Result<Vec<Instruction>> {
         // Simplified - in production this would parse route data and build real swap instructions
-        Ok(vec![
-            solana_sdk::system_instruction::transfer(
-                wallet_pubkey,
-                wallet_pubkey,
-                1000,
-            ),
-        ])
+        Ok(vec![solana_sdk::system_instruction::transfer(
+            wallet_pubkey,
+            wallet_pubkey,
+            1000,
+        )])
     }
 
     /// Get sandwich engine statistics
@@ -700,7 +774,8 @@ impl SandwichEngine {
         if self.stats.opportunities_detected == 0 {
             0.0
         } else {
-            (self.stats.opportunities_executed as f64 / self.stats.opportunities_detected as f64) * 100.0
+            (self.stats.opportunities_executed as f64 / self.stats.opportunities_detected as f64)
+                * 100.0
         }
     }
 }

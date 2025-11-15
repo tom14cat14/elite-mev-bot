@@ -88,7 +88,10 @@ impl BotCoordinator {
     }
 
     pub async fn start(&self) -> Result<()> {
-        let mut rx = self.message_rx.write().take()
+        let mut rx = self
+            .message_rx
+            .write()
+            .take()
             .ok_or_else(|| anyhow::anyhow!("Coordinator already started"))?;
 
         let registered_bots = self.registered_bots.clone();
@@ -100,22 +103,31 @@ impl BotCoordinator {
             while let Some(message) = rx.recv().await {
                 match message {
                     CoordinatorMessage::RegisterBot(registration) => {
-                        info!("Registering bot: {} ({:?})", registration.bot_id, registration.bot_type);
-                        registered_bots.write().insert(registration.bot_id.clone(), registration);
+                        info!(
+                            "Registering bot: {} ({:?})",
+                            registration.bot_id, registration.bot_type
+                        );
+                        registered_bots
+                            .write()
+                            .insert(registration.bot_id.clone(), registration);
                     }
 
                     CoordinatorMessage::SubmitExecution(request) => {
-                        debug!("Received execution request: {} from bot {}",
-                               request.request_id, request.bot_id);
+                        debug!(
+                            "Received execution request: {} from bot {}",
+                            request.request_id, request.bot_id
+                        );
 
                         // Add to queue and sort by priority and profit
                         {
                             let mut queue = execution_queue.write();
                             queue.push(request);
                             queue.sort_by(|a, b| {
-                                b.priority.cmp(&a.priority)
-                                    .then(b.estimated_profit_sol.partial_cmp(&a.estimated_profit_sol)
-                                          .unwrap_or(std::cmp::Ordering::Equal))
+                                b.priority.cmp(&a.priority).then(
+                                    b.estimated_profit_sol
+                                        .partial_cmp(&a.estimated_profit_sol)
+                                        .unwrap_or(std::cmp::Ordering::Equal),
+                                )
                             });
                         }
 
@@ -124,10 +136,15 @@ impl BotCoordinator {
                             execution_queue.clone(),
                             jupiter_limiter.clone(),
                             stats.clone(),
-                        ).await;
+                        )
+                        .await;
                     }
 
-                    CoordinatorMessage::ExecutionComplete { request_id, success, actual_profit_sol } => {
+                    CoordinatorMessage::ExecutionComplete {
+                        request_id,
+                        success,
+                        actual_profit_sol,
+                    } => {
                         debug!("Execution {} completed: success={}", request_id, success);
 
                         let mut stats_guard = stats.write();
@@ -168,14 +185,19 @@ impl BotCoordinator {
             // Execute the trade using Jupiter
             match Self::execute_jupiter_trade(&jupiter_limiter, &request).await {
                 Ok(actual_profit) => {
-                    info!("Successfully executed trade {} with profit: {:.4} SOL",
-                          request.request_id, actual_profit);
+                    info!(
+                        "Successfully executed trade {} with profit: {:.4} SOL",
+                        request.request_id, actual_profit
+                    );
 
                     let mut stats_guard = stats.write();
                     stats_guard.total_executions += 1;
                     stats_guard.successful_executions += 1;
                     stats_guard.total_profit_sol += actual_profit;
-                    *stats_guard.executions_by_bot.entry(request.bot_id).or_insert(0) += 1;
+                    *stats_guard
+                        .executions_by_bot
+                        .entry(request.bot_id)
+                        .or_insert(0) += 1;
                 }
                 Err(e) => {
                     warn!("Failed to execute trade {}: {}", request.request_id, e);
@@ -183,7 +205,10 @@ impl BotCoordinator {
                     let mut stats_guard = stats.write();
                     stats_guard.total_executions += 1;
                     stats_guard.failed_executions += 1;
-                    *stats_guard.executions_by_bot.entry(request.bot_id).or_insert(0) += 1;
+                    *stats_guard
+                        .executions_by_bot
+                        .entry(request.bot_id)
+                        .or_insert(0) += 1;
 
                     if e.to_string().contains("rate limit") {
                         stats_guard.rate_limit_hits += 1;
@@ -227,21 +252,29 @@ pub struct CoordinatorHandle {
 
 impl CoordinatorHandle {
     pub fn register_bot(&self, registration: BotRegistration) -> Result<()> {
-        self.message_tx.send(CoordinatorMessage::RegisterBot(registration))?;
+        self.message_tx
+            .send(CoordinatorMessage::RegisterBot(registration))?;
         Ok(())
     }
 
     pub fn submit_execution(&self, request: ExecutionRequest) -> Result<()> {
-        self.message_tx.send(CoordinatorMessage::SubmitExecution(request))?;
+        self.message_tx
+            .send(CoordinatorMessage::SubmitExecution(request))?;
         Ok(())
     }
 
-    pub fn execution_complete(&self, request_id: String, success: bool, actual_profit_sol: Option<f64>) -> Result<()> {
-        self.message_tx.send(CoordinatorMessage::ExecutionComplete {
-            request_id,
-            success,
-            actual_profit_sol,
-        })?;
+    pub fn execution_complete(
+        &self,
+        request_id: String,
+        success: bool,
+        actual_profit_sol: Option<f64>,
+    ) -> Result<()> {
+        self.message_tx
+            .send(CoordinatorMessage::ExecutionComplete {
+                request_id,
+                success,
+                actual_profit_sol,
+            })?;
         Ok(())
     }
 

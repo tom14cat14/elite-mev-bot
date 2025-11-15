@@ -48,7 +48,7 @@ impl IntelligentFailover {
         let primary = DataSourceConfig {
             name: "ShredStream".to_string(),
             endpoint: "https://shreds-ny6-1.erpc.global".to_string(),
-            max_latency_ms: 40.0, // Grok's threshold
+            max_latency_ms: 40.0,      // Grok's threshold
             timeout_duration_ms: 5000, // 5 second timeout
             is_primary: true,
         };
@@ -77,8 +77,10 @@ impl IntelligentFailover {
             "ShredStream" => {
                 // Switch to gRPC if ShredStream latency >40ms (Grok's threshold)
                 if current_latency_ms > self.primary.max_latency_ms {
-                    warn!("🔄 FAILOVER TRIGGER: ShredStream {:.1}ms > {:.1}ms threshold",
-                          current_latency_ms, self.primary.max_latency_ms);
+                    warn!(
+                        "🔄 FAILOVER TRIGGER: ShredStream {:.1}ms > {:.1}ms threshold",
+                        current_latency_ms, self.primary.max_latency_ms
+                    );
                     return true;
                 }
             }
@@ -88,8 +90,10 @@ impl IntelligentFailover {
                     if last_switch.elapsed().as_secs() >= self.stability_window_secs {
                         let recent_shred_latency = self.get_recent_avg_latency("ShredStream");
                         if recent_shred_latency < 30.0 && recent_shred_latency > 0.0 {
-                            info!("🔄 REVERT TRIGGER: ShredStream stable at {:.1}ms for {}s",
-                                  recent_shred_latency, self.stability_window_secs);
+                            info!(
+                                "🔄 REVERT TRIGGER: ShredStream stable at {:.1}ms for {}s",
+                                recent_shred_latency, self.stability_window_secs
+                            );
                             return true;
                         }
                     }
@@ -136,8 +140,10 @@ impl IntelligentFailover {
             _ => {}
         }
 
-        let switch_msg = format!("🔄 FAILOVER #{}: {} → {} | Reason: {}",
-                                metrics.switch_count, from, to, reason);
+        let switch_msg = format!(
+            "🔄 FAILOVER #{}: {} → {} | Reason: {}",
+            metrics.switch_count, from, to, reason
+        );
 
         if to == "gRPC" {
             warn!("{}", switch_msg);
@@ -204,9 +210,18 @@ impl IntelligentFailover {
         let status = self.get_status();
 
         info!("📊 INTELLIGENT FAILOVER STATUS:");
-        info!("  • Current Source: {} (switches: {})", status.current_source, status.switch_count);
-        info!("  • ShredStream: {:.1}ms avg (failures: {})", status.shredstream_avg_latency, status.shredstream_failures);
-        info!("  • gRPC Backup: {:.1}ms avg (failures: {})", status.grpc_avg_latency, status.grpc_failures);
+        info!(
+            "  • Current Source: {} (switches: {})",
+            status.current_source, status.switch_count
+        );
+        info!(
+            "  • ShredStream: {:.1}ms avg (failures: {})",
+            status.shredstream_avg_latency, status.shredstream_failures
+        );
+        info!(
+            "  • gRPC Backup: {:.1}ms avg (failures: {})",
+            status.grpc_avg_latency, status.grpc_failures
+        );
 
         // Grok's pipeline analysis
         let pipeline_latency = if status.is_primary_active {
@@ -215,7 +230,10 @@ impl IntelligentFailover {
             status.grpc_avg_latency + 75.0 + 45.0 // gRPC + PumpFun RPC + Jito
         };
 
-        info!("  • Pipeline Est: {:.0}ms (Target: <150ms for EXTREME mode)", pipeline_latency);
+        info!(
+            "  • Pipeline Est: {:.0}ms (Target: <150ms for EXTREME mode)",
+            pipeline_latency
+        );
 
         if pipeline_latency < 150.0 {
             info!("  • Status: 🔥 ELITE TIER - Optimal for MEV front-running");
