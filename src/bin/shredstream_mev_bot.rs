@@ -51,7 +51,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
 
                         // Show activity every 1000 cycles (1 second)
-                        if total_cycles % 1000 == 0 {
+                        if total_cycles.is_multiple_of(1000) {
                             let avg_latency = latency_samples.iter().sum::<f64>() / latency_samples.len() as f64;
                             let runtime = start_time.elapsed().as_secs_f64();
                             let cycles_per_sec = total_cycles as f64 / runtime;
@@ -67,7 +67,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
 
                         // Performance report every 10 seconds
-                        if total_cycles % 10000 == 0 {
+                        if total_cycles.is_multiple_of(10000) {
                             let runtime = start_time.elapsed().as_secs_f64();
                             let avg_latency = latency_samples.iter().sum::<f64>() / latency_samples.len() as f64;
                             let cycles_per_sec = total_cycles as f64 / runtime;
@@ -88,7 +88,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                     Err(e) => {
-                        if total_cycles % 5000 == 0 { // Report errors every 5 seconds
+                        if total_cycles.is_multiple_of(5000) { // Report errors every 5 seconds
                             println!("[WARN] ⚠️  ShredStream processing error: {} (check IP whitelist)", e);
                         }
                     }
