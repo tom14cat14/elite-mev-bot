@@ -3483,13 +3483,7 @@ async fn execute_new_coin_opportunity(
     // STEP 3: Calculate position size dynamically based on quality score using lamports
     // ALL QUALITY TIERS: Use 100% of tradeable balance (MAXIMUM AGGRESSION)
     // NOTE: All quality tiers now use 100% for maximum profit potential
-    let quality_allocation_percent = if token.quality_score >= 9.5 {
-        100 // Use 100% for exceptional opportunities
-    } else if token.quality_score >= 9.0 {
-        100 // Use 100% for high quality (INCREASED from 70%)
-    } else {
-        100 // Use 100% for good quality (INCREASED from 50%)
-    };
+    let quality_allocation_percent = 100; // Use 100% across all quality tiers
 
     // GROK FIX: Calculate position size in lamports (no precision loss)
     let position_size_lamports = (tradeable_balance_lamports * quality_allocation_percent) / 100;
@@ -3863,8 +3857,8 @@ async fn execute_new_coin_opportunity(
                 // Min tip: 100k lamports (0.0001 SOL - 95th percentile per JITO docs)
                 // Min gas: 300k lamports (0.0003 SOL for PumpFun transactions)
                 // Max caps increased for high-profit opportunities (quality 9.5+ with 20% expected returns)
-                let jito_priority_fee = gas_budget_lamports.max(300_000).min(3_000_000); // Cap at 0.003 SOL (was 0.001)
-                let _jito_tip = tip_budget_lamports.max(100_000).min(5_000_000); // Cap at 0.005 SOL (was 0.0005, calculated in jito_submitter)
+                let jito_priority_fee = gas_budget_lamports.clamp(300_000, 3_000_000); // Cap at 0.003 SOL (was 0.001)
+                let _jito_tip = tip_budget_lamports.clamp(100_000, 5_000_000); // Cap at 0.005 SOL (was 0.0005, calculated in jito_submitter)
 
                 let jito_compute_limit = std::env::var("JITO_COMPUTE_LIMIT")
                     .ok()

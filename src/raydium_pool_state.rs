@@ -69,7 +69,6 @@ pub struct RaydiumPoolState {
 /// - pool_temp_lp_token_account: Pubkey (32 bytes) at offset 480
 /// - amm_owner: Pubkey (32 bytes) at offset 512
 /// - pnl_owner: Pubkey (32 bytes) at offset 544
-
 impl RaydiumPoolState {
     /// Parse pool state from account data
     pub fn parse(pool_pubkey: &Pubkey, data: &[u8]) -> Result<Self> {
