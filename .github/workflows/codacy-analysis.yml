@@ -19,6 +19,7 @@ jobs:
   codacy-security-scan:
     name: Codacy Security Scan
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout code
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
@@ -39,6 +40,7 @@ jobs:
   codacy-coverage-reporter:
     name: Codacy Coverage Report
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     if: github.event_name == 'push'
     steps:
       - name: Checkout code
@@ -66,15 +68,17 @@ jobs:
           override: true
         if: hashFiles('**/Cargo.toml') != ''
 
-      - name: Install cargo-tarpaulin
-        if: hashFiles('**/Cargo.toml') != ''
-        run: cargo install cargo-tarpaulin || true
-
-      - name: Run Rust tests with coverage
-        if: hashFiles('**/Cargo.toml') != ''
-        run: |
-          cargo tarpaulin --out Xml --output-dir . || echo "Coverage generation failed, skipping..."
-        continue-on-error: true
+      # Skip cargo-tarpaulin - it takes 20-30+ minutes to install from source
+      # and often causes workflow timeouts. Re-enable only if coverage is critical.
+      # - name: Install cargo-tarpaulin
+      #   if: hashFiles('**/Cargo.toml') != ''
+      #   run: cargo install cargo-tarpaulin || true
+      #
+      # - name: Run Rust tests with coverage
+      #   if: hashFiles('**/Cargo.toml') != ''
+      #   run: |
+      #     cargo tarpaulin --out Xml --output-dir . || echo "Coverage generation failed, skipping..."
+      #   continue-on-error: true
 
       # Upload coverage to Codacy
       - name: Upload coverage to Codacy
