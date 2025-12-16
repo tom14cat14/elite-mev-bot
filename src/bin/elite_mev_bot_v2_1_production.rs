@@ -1806,7 +1806,7 @@ async fn main() -> Result<()> {
         prediction_confidence_threshold: 0.8,
     };
 
-    let new_coin_detector = Arc::new(RwLock::new(
+    let _new_coin_detector = Arc::new(RwLock::new(
         crate::pumpfun_new_coin_detector::PumpFunNewCoinDetector::new(detector_config)?,
     ));
 
@@ -1816,7 +1816,7 @@ async fn main() -> Result<()> {
     perform_safety_verification(&ultra_config, &trading_keypair_arc).await?;
 
     // Initialize token filter
-    let shared_filter = Arc::new(ShredStreamTokenFilter::new(
+    let _shared_filter = Arc::new(ShredStreamTokenFilter::new(
         crate::market_cap_filter::MarketCapThresholds {
             minimum_market_cap_usd: 0.0, // No minimum for PumpFun
             minimum_volume_24h_usd: ultra_config.min_volume_usd_per_minute * 24.0 * 60.0, // Convert per-minute to 24h
@@ -1827,8 +1827,8 @@ async fn main() -> Result<()> {
     ));
 
     // Initialize ultra-speed metrics
-    let metrics = Arc::new(Mutex::new(UltraSpeedMetrics::default()));
-    let enhanced_config = Arc::new(Mutex::new(ultra_config.clone()));
+    let _metrics = Arc::new(Mutex::new(UltraSpeedMetrics::default()));
+    let _enhanced_config = Arc::new(Mutex::new(ultra_config.clone()));
 
     // GROK ITERATION 6 FIX #1: Initialize Safety Infrastructure
     info!("🛡️  Initializing safety infrastructure...");
@@ -2055,7 +2055,7 @@ async fn main() -> Result<()> {
 
     let mut total_trades = 0u64;
     let mut successful_trades = 0u64;
-    let total_profit_sol = 0.0f64;
+    let _total_profit_sol = 0.0f64;
     let mut total_opportunities = 0u64;
     let mut total_scans = 0u64;
 
@@ -2215,7 +2215,7 @@ async fn execute_sandwich_opportunity(
     opportunity: &crate::mev_sandwich_detector::SandwichOpportunity,
     jito_client: &Arc<JitoBundleClient>,
     trading_keypair: &Arc<Keypair>,
-    safety_limits: &Arc<SafetyLimits>,
+    _safety_limits: &Arc<SafetyLimits>,
     paper_trading: bool,
     db_tracker: &Arc<MevDatabaseTracker>,
 ) -> Result<bool> {
@@ -3065,7 +3065,7 @@ async fn execute_sandwich_opportunity(
                     "So11111111111111111111111111111111111111112",
                 )
                 .unwrap();
-                let (token_ata, wsol_ata) = match token_account_manager.get_or_create_swap_atas(
+                let (token_ata, _wsol_ata) = match token_account_manager.get_or_create_swap_atas(
                     trading_keypair,
                     &pool_state.token_mint,
                     &wsol_mint,
@@ -3170,7 +3170,7 @@ async fn execute_sandwich_opportunity(
     // For most DEXs, the pool address contains or relates to the token mint
     // We'll use a simplified approach: attempt to parse token accounts from the opportunity
 
-    let token_mint = if let Some(pool_str) = opportunity.pool_address.as_ref() {
+    let _token_mint = if let Some(pool_str) = opportunity.pool_address.as_ref() {
         // Try to parse as pubkey
         match Pubkey::from_str(pool_str) {
             Ok(pool_pubkey) => {
