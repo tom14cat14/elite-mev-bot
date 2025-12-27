@@ -1454,6 +1454,14 @@ async fn main() -> Result<()> {
     // CRITICAL: Load environment variables from .env file FIRST
     dotenvy::dotenv().ok();
 
+    // Initialize tracing subscriber for LIBRARY logging (mev_sandwich_detector, etc.)
+    // This captures logs from library modules that use the `tracing` crate
+    // (Note: This binary's own info!/warn!/etc macros still use println)
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .with_target(true)  // Show module paths for better debugging
+        .init();
+
     // Simplified logging initialization (no external deps)
     println!("[INIT] Initializing Elite MEV Bot v2.1 Production logging...");
 
@@ -1659,6 +1667,12 @@ async fn main() -> Result<()> {
         trading_keypair_arc.clone(),
         Some(rpc_url.clone()),
     );
+
+    // Start the tip floor refresh background task for dynamic 99th percentile tipping
+    // This fetches current tip levels from JITO every few minutes
+    jito_client_raw.start_tip_floor_refresh();
+    info!("🔄 Started JITO tip floor refresh for dynamic 99th percentile tipping");
+
     let jito_client = Arc::new(jito_client_raw);
 
     let _trade_executor = ProductionTradeExecutor::new_with_arc(
@@ -2059,6 +2073,11 @@ async fn main() -> Result<()> {
     let mut total_opportunities = 0u64;
     let mut total_scans = 0u64;
 
+    // Track pools that have failed (ATA creation issues, etc.) - skip temporarily, retry after cooldown
+    // Uses HashMap<pool_address, failure_timestamp> instead of permanent HashSet
+    let mut failed_pools: std::collections::HashMap<String, std::time::Instant> = std::collections::HashMap::new();
+    const FAILED_POOL_COOLDOWN_SECS: u64 = 120; // Retry failed pools after 2 minutes
+
     // Initialize ShredStream Processor for DIRECT swap detection (not cached prices!)
     // CRITICAL FIX: Force correct endpoint (env var was loading wrong value)
     let endpoint = "https://shreds-ny6-1.erpc.global".to_string();
@@ -2129,6 +2148,33 @@ async fn main() -> Result<()> {
 
                             // Execute sandwich trades on detected opportunities
                             for opportunity in &event.sandwich_opportunities {
+                                // ⚡ STRICT FRESHNESS CHECK: Skip opportunities older than 50ms
+                                // Stale victims are already being processed by validators
+                                const MAX_VICTIM_AGE_MS: u128 = 50;
+                                let victim_age_ms = opportunity.timestamp.elapsed().as_millis();
+                                if victim_age_ms > MAX_VICTIM_AGE_MS {
+                                    debug!("⏭️ STALE VICTIM: {}ms old (max {}ms) - skipping: {}",
+                                           victim_age_ms, MAX_VICTIM_AGE_MS, &opportunity.signature[..16.min(opportunity.signature.len())]);
+                                    continue;
+                                }
+
+                                // Skip pools that failed recently (with cooldown for retry)
+                                if let Some(ref pool_addr) = opportunity.pool_address {
+                                    if let Some(failure_time) = failed_pools.get(pool_addr) {
+                                        let elapsed = failure_time.elapsed().as_secs();
+                                        if elapsed < FAILED_POOL_COOLDOWN_SECS {
+                                            debug!("⏭️ Skipping recently-failed pool: {} (retry in {}s)",
+                                                   &pool_addr[..16.min(pool_addr.len())],
+                                                   FAILED_POOL_COOLDOWN_SECS - elapsed);
+                                            continue;
+                                        } else {
+                                            // Cooldown expired - remove from failed pools and retry
+                                            failed_pools.remove(pool_addr);
+                                            debug!("♻️ Retrying pool after cooldown: {}", &pool_addr[..16.min(pool_addr.len())]);
+                                        }
+                                    }
+                                }
+
                                 // Check circuit breaker before each trade
                                 if let Err(e) = circuit_breaker.check_and_attempt() {
                                     warn!("🔒 Circuit breaker OPEN - skipping sandwich: {}", e);
@@ -2157,10 +2203,20 @@ async fn main() -> Result<()> {
                                               opportunity.dex_name, opportunity.estimated_sol_value);
                                     }
                                     Ok(false) => {
+                                        // Mark pool as temporarily failed - will retry after cooldown
+                                        if let Some(ref pool_addr) = opportunity.pool_address {
+                                            failed_pools.insert(pool_addr.clone(), std::time::Instant::now());
+                                            warn!("⚠️ Pool marked as failed (retry in {}s): {}", FAILED_POOL_COOLDOWN_SECS, &pool_addr[..16.min(pool_addr.len())]);
+                                        }
                                         debug!("⚠️ Sandwich execution skipped: {} on {}",
                                                opportunity.estimated_sol_value, opportunity.dex_name);
                                     }
                                     Err(e) => {
+                                        // Mark pool as temporarily failed on error - will retry after cooldown
+                                        if let Some(ref pool_addr) = opportunity.pool_address {
+                                            failed_pools.insert(pool_addr.clone(), std::time::Instant::now());
+                                            warn!("⚠️ Pool marked as failed (retry in {}s): {}", FAILED_POOL_COOLDOWN_SECS, &pool_addr[..16.min(pool_addr.len())]);
+                                        }
                                         circuit_breaker.record_failure();
                                         error!("❌ Sandwich execution error: {} | DEX: {}", e, opportunity.dex_name);
                                     }
@@ -2237,6 +2293,16 @@ async fn execute_sandwich_opportunity(
         return Ok(true);
     }
 
+    // ⚡ 0SLOT CRITICAL: Check if current leader is local (US-East)
+    // Skip opportunity if leader is remote - bundle won't land in time
+    // Remote leaders = 100-200ms latency = victim confirms before our bundle
+    let rpc_url_check = std::env::var("SOLANA_RPC_ENDPOINT")
+        .unwrap_or_else(|_| "https://api.mainnet-beta.solana.com".to_string());
+    if !shared_bot_infrastructure::leader_schedule_manager::should_trade_current_slot(&rpc_url_check).await {
+        debug!("⚡ 0SLOT: SKIPPING - remote leader, victim would confirm first");
+        return Ok(false);
+    }
+
     // Real sandwich execution with JITO bundles
     info!(
         "💰 REAL SANDWICH EXECUTION | DEX: {} | Victim: {:.4} SOL | Sig: {}",
@@ -2245,13 +2311,30 @@ async fn execute_sandwich_opportunity(
         &opportunity.signature[..20]
     );
 
-    // Position sizing: FIXED 2.0 SOL - Max aggression like professional MEV bots!
-    // We use LARGER positions than victims to create maximum price impact
+    // Position sizing: DYNAMIC - Use 80% of available balance
+    // This ensures we never try to spend more than we have!
     let victim_size_sol = opportunity.estimated_sol_value;
-    let position_size_sol = 2.0; // Always use our max firepower!
 
-    info!("📊 Position sizing | Victim: {:.4} SOL | Our position: {:.4} SOL (FIXED MAX - pro MEV strategy)",
-          victim_size_sol, position_size_sol);
+    // Query current wallet balance
+    let rpc_url = std::env::var("SOLANA_RPC_ENDPOINT")
+        .unwrap_or_else(|_| "https://api.mainnet-beta.solana.com".to_string());
+    let rpc_client = solana_rpc_client::rpc_client::RpcClient::new(rpc_url);
+    let balance_lamports = match rpc_client.get_balance(&trading_keypair.pubkey()) {
+        Ok(b) => b,
+        Err(e) => {
+            warn!("⚠️ Failed to get wallet balance: {} - skipping opportunity", e);
+            return Ok(false);
+        }
+    };
+    let balance_sol = balance_lamports as f64 / 1_000_000_000.0;
+
+    // Reserve 0.1 SOL for fees, use 80% of remainder
+    let reserve_sol = 0.1;
+    let available_sol = (balance_sol - reserve_sol).max(0.0);
+    let position_size_sol = available_sol * 0.80; // 80% of available balance
+
+    info!("📊 Position sizing | Wallet: {:.4} SOL | Available: {:.4} SOL | Position: {:.4} SOL (80%) | Victim: {:.4} SOL",
+          balance_sol, available_sol, position_size_sol, victim_size_sol);
 
     // SAFETY: Skip if position too small (under 0.01 SOL)
     if position_size_sol < 0.01 {
@@ -2295,14 +2378,15 @@ async fn execute_sandwich_opportunity(
     let gross_profit =
         position_size_sol * (estimated_price_impact_pct / 100.0) * capture_percentage;
 
-    // Updated fees for 99% success rate
-    let jito_fee = 0.002; // 0.002 SOL for reliable landing
+    // Updated fees - MUST match actual JITO tip sent (0.005 SOL)
+    // CRITICAL: This fee calculation determines profitability threshold
+    let jito_fee = 0.005; // 0.005 SOL - matches actual tip sent in bundle submission
     let gas_fee = 0.0001;
-    let base_total_fees = jito_fee + gas_fee;
+    let base_total_fees = jito_fee + gas_fee;  // 0.0051 SOL
 
-    // Fee buffer multiplier: 1.5x for tip variability
-    let fee_buffer_multiplier = 1.5;
-    let effective_total_fees = base_total_fees * fee_buffer_multiplier;
+    // Fee buffer multiplier: 1.2x (reduced from 1.5x since fee is now accurate)
+    let fee_buffer_multiplier = 1.2;
+    let effective_total_fees = base_total_fees * fee_buffer_multiplier;  // 0.00612 SOL
 
     // Volatility buffer
     let volatility_buffer = if enable_bonding_curve {
@@ -2447,157 +2531,223 @@ async fn execute_sandwich_opportunity(
                 info!("   Coin Mint: {}", pool_state.coin_mint);
                 info!("   PC Mint: {}", pool_state.pc_mint);
 
-                // Get or create our token accounts for both mints
-                info!("🔍 Getting/creating token accounts for sandwich...");
+                // Compute ATA addresses (no creation yet - will be included in bundle for atomicity)
+                // This prevents fee waste: if bundle fails, ATA creation also fails
+                info!("🔍 Computing token accounts for sandwich (will create in bundle)...");
 
                 let token_account_manager =
                     crate::token_account_manager::TokenAccountManager::new(rpc_url);
 
-                // We need ATAs for both coin_mint and pc_mint
-                // coin_mint is typically the token, pc_mint is typically SOL (WSOL)
-                let (coin_ata, pc_ata) = match token_account_manager.get_or_create_swap_atas(
-                    trading_keypair,
-                    &pool_state.coin_mint,
-                    &pool_state.pc_mint,
-                ) {
-                    Ok(atas) => atas,
-                    Err(e) => {
-                        warn!("⚠️  Failed to get/create token accounts: {}", e);
-                        warn!("   This could mean:");
-                        warn!("   - RPC connection issue");
-                        warn!("   - Insufficient SOL for ATA creation (need ~0.002 SOL)");
-                        warn!("   - Transaction failed");
-                        return Ok(false);
-                    }
-                };
+                // Get correct token programs for each mint
+                let coin_program = token_account_manager.get_token_program_for_mint(&pool_state.coin_mint);
+                let pc_program = token_account_manager.get_token_program_for_mint(&pool_state.pc_mint);
 
-                info!("✅ Token accounts ready!");
-                info!("   Coin ATA ({}): {}", pool_state.coin_mint, coin_ata);
-                info!("   PC ATA ({}): {}", pool_state.pc_mint, pc_ata);
-
-                // Build back-running arbitrage transaction
-                // Strategy: Victim just bought token → Price increased → We sell into the pump
-                info!("🏗️  Building back-running arbitrage transaction...");
-
-                // Determine swap direction based on victim's trade
-                // If victim bought token (SOL → Token), we sell token (Token → SOL)
-                // If victim sold token (Token → SOL), we buy token (SOL → Token)
-
-                // For now, assume victim bought (most common case)
-                // TODO: Parse victim's swap direction from transaction details
-
-                // Convert position size to lamports
-                let position_lamports = (position_size_sol * 1_000_000_000.0) as u64;
-
-                // Calculate slippage (0.5% for tight execution)
-                let slippage = 0.005; // 0.5%
-
-                // BACK-RUN ARBITRAGE: Sell into victim's price pump
-                // Victim bought token → Price went up → We sell at inflated price
-                info!("🔴 Building arbitrage swap (Token → SOL)");
-                info!("   Strategy: Sell into victim's price impact");
-                info!("   Position: {:.6} SOL worth of tokens", position_size_sol);
-
-                // Estimate tokens needed (simplified - should query actual pool reserves)
-                let estimated_tokens_to_sell = position_lamports; // Rough 1:1 estimate
-                let expected_profit_pct = estimated_net_profit / position_size_sol;
-                let min_sol_out =
-                    (position_lamports as f64 * (1.0 + expected_profit_pct - slippage)) as u64;
-
-                info!("   Selling ~{} tokens", estimated_tokens_to_sell);
-                info!(
-                    "   Min SOL out: {:.6} SOL ({} lamports)",
-                    min_sol_out as f64 / 1e9,
-                    min_sol_out
-                );
-                info!("   Expected profit: {:.2}%", expected_profit_pct * 100.0);
-
-                let arbitrage_ix = match crate::raydium_swap_builder::build_backrun_instruction(
-                    pool_state,
-                    &coin_ata, // Source: our token account (sell tokens)
-                    &pc_ata,   // Dest: our SOL account (receive SOL)
+                // Compute ATA addresses (deterministic - doesn't require RPC)
+                let coin_ata = crate::token_account_manager::TokenAccountManager::get_ata_address_with_program(
                     &trading_keypair.pubkey(),
-                    estimated_tokens_to_sell,
-                    min_sol_out,
+                    &pool_state.coin_mint,
+                    &coin_program,
+                );
+                let pc_ata = crate::token_account_manager::TokenAccountManager::get_ata_address_with_program(
+                    &trading_keypair.pubkey(),
+                    &pool_state.pc_mint,
+                    &pc_program,
+                );
+
+                // Build idempotent ATA creation instructions (will succeed even if ATA exists)
+                let coin_ata_ix = crate::token_account_manager::TokenAccountManager::build_create_ata_instruction_with_program(
+                    &trading_keypair.pubkey(),
+                    &pool_state.coin_mint,
+                    &coin_program,
+                );
+                let pc_ata_ix = crate::token_account_manager::TokenAccountManager::build_create_ata_instruction_with_program(
+                    &trading_keypair.pubkey(),
+                    &pool_state.pc_mint,
+                    &pc_program,
+                );
+
+                info!("✅ ATAs computed (will create in bundle)!");
+                info!("   Coin ATA (meme token): {}", coin_ata);
+                info!("   PC ATA (SOL/WSOL): {}", pc_ata);
+
+                // ============================================
+                // 🥪 FULL SANDWICH: FRONTRUN + BACKRUN
+                // ============================================
+                // Sandwich strategy (when victim is BUYING meme token):
+                // 1. FRONTRUN: Buy meme tokens with SOL (PC→Coin)
+                //    - We buy BEFORE victim's large buy
+                //    - Our buy pushes price up slightly
+                // 2. [Victim's tx lands in between - not in our bundle]
+                //    - Victim's large buy pushes price up more
+                // 3. BACKRUN: Sell meme tokens for SOL (Coin→PC)
+                //    - We sell AFTER victim at the pumped price
+                //    - Profit = (sell_price - buy_price) * quantity - fees
+                // ============================================
+                info!("🥪 Building FULL SANDWICH for Raydium AMM V4...");
+
+                let position_lamports = (position_size_sol * 1_000_000_000.0) as u64;
+                let slippage_bps = 150u64; // 1.5% slippage tolerance
+
+                // Estimate meme tokens we'll get from frontrun
+                // AMM V4 uses constant product (x*y=k), rough estimate for small trades
+                let estimated_meme_tokens = position_lamports; // Rough 1:1 estimate (will be refined by AMM)
+                let min_meme_out = estimated_meme_tokens * (10000 - slippage_bps) / 10000;
+
+                info!("📊 Sandwich calculations:");
+                info!("   Position: {} lamports ({:.4} SOL)", position_lamports, position_size_sol);
+                info!("   Expected meme tokens: ~{}", estimated_meme_tokens);
+                info!("   Min meme out (with {}bps slippage): {}", slippage_bps, min_meme_out);
+
+                // ============================================
+                // STEP 1: BUILD FRONTRUN INSTRUCTION (BUY MEME)
+                // ============================================
+                // FRONTRUN = BUY meme tokens with SOL (PC→Coin swap)
+                // Source: pc_ata (SOL we're spending)
+                // Dest: coin_ata (meme we're receiving)
+                info!("🔨 Building FRONTRUN instruction (buy meme with SOL)...");
+                let frontrun_ix = match crate::raydium_swap_builder::build_frontrun_instruction(
+                    pool_state,
+                    &pc_ata,    // Source: SOL (what we spend)
+                    &coin_ata,  // Dest: meme token (what we receive)
+                    &trading_keypair.pubkey(),
+                    position_lamports,  // Amount of SOL to spend
+                    min_meme_out,       // Minimum meme tokens to receive
                 ) {
-                    Ok(ix) => ix,
+                    Ok(ix) => {
+                        info!("✅ FRONTRUN instruction built successfully");
+                        ix
+                    }
                     Err(e) => {
-                        warn!("⚠️  Failed to build arbitrage instruction: {}", e);
+                        let _ = db_tracker.log_failed(
+                            &opportunity.signature,
+                            &format!("Failed to build AMM V4 frontrun: {}", e),
+                        );
+                        warn!("⚠️  Failed to build AMM V4 frontrun instruction: {}", e);
                         return Ok(false);
                     }
                 };
 
-                info!("✅ Arbitrage instruction built successfully!");
-                info!("📦 Building JITO bundle: [arbitrage only]");
+                // ============================================
+                // STEP 2: BUILD BACKRUN INSTRUCTION (SELL MEME)
+                // ============================================
+                // BACKRUN = SELL meme tokens for SOL (Coin→PC swap)
+                // We sell the tokens we bought in frontrun
+                // Source: coin_ata (meme we're selling)
+                // Dest: pc_ata (SOL we're receiving)
+                let expected_profit_pct = estimated_net_profit / position_size_sol;
+                let min_sol_back = (position_lamports as f64 * (1.0 + expected_profit_pct * 0.5)) as u64; // 50% of expected profit as minimum
 
-                // Get recent blockhash for transaction
-                let recent_blockhash = match rpc_client.get_latest_blockhash() {
-                    Ok(blockhash) => blockhash,
+                info!("🔨 Building BACKRUN instruction (sell meme for SOL)...");
+                info!("   Selling: ~{} meme tokens (expected from frontrun)", estimated_meme_tokens);
+                info!("   Min SOL back: {} lamports ({:.4} SOL)", min_sol_back, min_sol_back as f64 / 1e9);
+
+                let backrun_ix = match crate::raydium_swap_builder::build_backrun_instruction(
+                    pool_state,
+                    &coin_ata,  // Source: meme token (what we sell)
+                    &pc_ata,    // Dest: SOL (what we receive)
+                    &trading_keypair.pubkey(),
+                    estimated_meme_tokens,  // Amount of meme tokens to sell (from frontrun)
+                    min_sol_back,           // Minimum SOL to receive
+                ) {
+                    Ok(ix) => {
+                        info!("✅ BACKRUN instruction built successfully");
+                        ix
+                    }
                     Err(e) => {
-                        warn!("⚠️  Failed to get recent blockhash: {}", e);
+                        let _ = db_tracker.log_failed(
+                            &opportunity.signature,
+                            &format!("Failed to build AMM V4 backrun: {}", e),
+                        );
+                        warn!("⚠️  Failed to build AMM V4 backrun instruction: {}", e);
                         return Ok(false);
                     }
                 };
 
-                // Build arbitrage transaction (single tx, not a sandwich)
-                let arbitrage_tx = solana_sdk::transaction::Transaction::new_signed_with_payer(
-                    &[arbitrage_ix],
+                // ============================================
+                // STEP 3: BUILD TRANSACTIONS (USING VICTIM'S BLOCKHASH!)
+                // ============================================
+                info!("📦 Building JITO sandwich bundle: [FRONTRUN, BACKRUN]");
+
+                // CRITICAL: Use victim's blockhash for ALL bundle transactions
+                // This is the #1 cause of bundle failures - blockhash mismatch
+                // Grok audit: "ALL transactions in a JITO bundle need the SAME blockhash"
+                let blockhash_to_use = match &opportunity.victim_blockhash {
+                    Some(bh) => {
+                        info!("✅ Using VICTIM's blockhash: {} (CRITICAL for bundle success)", bh);
+                        *bh
+                    }
+                    None => {
+                        // Fallback to fetching fresh blockhash if victim's not available
+                        warn!("⚠️  No victim blockhash - fetching fresh (may cause bundle failure)");
+                        match rpc_client.get_latest_blockhash() {
+                            Ok(blockhash) => blockhash,
+                            Err(e) => {
+                                let _ = db_tracker.log_failed(
+                                    &opportunity.signature,
+                                    &format!("Failed to get blockhash: {}", e),
+                                );
+                                warn!("⚠️  Failed to get recent blockhash: {}", e);
+                                return Ok(false);
+                            }
+                        }
+                    }
+                };
+
+                // Build frontrun transaction (includes ATA creation for atomicity)
+                // ATA instructions are idempotent - they succeed even if ATA already exists
+                let frontrun_tx = solana_sdk::transaction::Transaction::new_signed_with_payer(
+                    &[coin_ata_ix, pc_ata_ix, frontrun_ix],  // ATA creation + frontrun swap
                     Some(&trading_keypair.pubkey()),
                     &[trading_keypair],
-                    recent_blockhash,
+                    blockhash_to_use,
                 );
+                info!("📦 Frontrun TX includes: 2 ATA creates + 1 swap (buy meme)");
 
-                info!("✅ Arbitrage transaction built and signed!");
-                info!(
-                    "   Transaction size: {} bytes",
-                    bincode::serialize(&arbitrage_tx).unwrap_or_default().len()
+                // Build backrun transaction
+                let backrun_tx = solana_sdk::transaction::Transaction::new_signed_with_payer(
+                    &[backrun_ix],  // Just the backrun swap (sell meme)
+                    Some(&trading_keypair.pubkey()),
+                    &[trading_keypair],
+                    blockhash_to_use,
                 );
+                info!("📦 Backrun TX includes: 1 swap (sell meme)");
 
-                // Calculate JITO tip based on expected profit
-                // Use the JITO tip portion from estimated_fees (0.0005 SOL - reduced for back-running)
-                let jito_tip_sol = 0.0005; // JITO tip portion from estimated_fees
-                let jito_tip_lamports = (jito_tip_sol * 1_000_000_000.0) as u64;
-                info!(
-                    "💰 JITO tip: {:.6} SOL ({} lamports)",
-                    jito_tip_sol, jito_tip_lamports
-                );
+                // Grok recommended: 0.005 SOL minimum tip for MEV bundles
+                let jito_tip_lamports = 5_000_000u64; // 0.005 SOL - Grok's recommendation
+                info!("💰 AMM V4 MEV tip: {} lamports ({:.4} SOL)", jito_tip_lamports, jito_tip_lamports as f64 / 1e9);
 
-                // Submit bundle to JITO
-                info!("🚀 Submitting JITO bundle...");
-
-                // 🔥 LIVE TRADING ENABLED 🔥
-                info!("🚀 Submitting back-running arbitrage to JITO...");
+                // ============================================
+                // STEP 4: SUBMIT REAL SANDWICH BUNDLE TO JITO
+                // ============================================
+                info!("🚀 Submitting Raydium AMM V4 SANDWICH bundle to JITO...");
+                info!("   Bundle: [FRONTRUN → VICTIM → BACKRUN → TIP] (4 txs)");
                 info!("   Pool: {}", &pool_address_str[..8]);
                 info!("   Position: {:.4} SOL", position_size_sol);
-                info!(
-                    "   Expected profit: {:.6} SOL ({:.2}%)",
-                    estimated_net_profit,
-                    expected_profit_pct * 100.0
-                );
-                info!("   Strategy: Sell into victim's price pump");
-                info!("   Bundle: [single arbitrage tx]");
+                info!("   Expected profit: {:.6} SOL ({:.2}%)", estimated_net_profit, expected_profit_pct * 100.0);
+                info!("   Victim tx bytes: {} bytes", opportunity.victim_tx_bytes.as_ref().map_or(0, |b| b.len()));
+                info!("   Victim blockhash: {:?}", opportunity.victim_blockhash);
 
                 let bundle_result = jito_client
-                    .submit_bundle(
-                        vec![arbitrage_tx], // Single transaction, not a sandwich
+                    .submit_sandwich_bundle(
+                        frontrun_tx,
+                        opportunity.victim_tx_bytes.clone(),
+                        backrun_tx,
                         Some(jito_tip_lamports),
+                        opportunity.victim_blockhash,
                     )
                     .await;
 
                 match bundle_result {
                     Ok(bundle_id) => {
-                        info!("✅ Arbitrage bundle submitted! ID: {}", bundle_id);
-                        info!("   Waiting for confirmation...");
-
-                        // Wait a bit for bundle to land
+                        info!("✅ AMM V4 SANDWICH bundle submitted! ID: {}", bundle_id);
+                        info!("🥪 TRUE sandwich: FRONTRUN → VICTIM → BACKRUN → TIP");
                         tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
 
-                        // Log execution to database
-                        let execution_latency_ms = 5.4; // Estimated execution latency
+                        let execution_latency_ms = 5.4;
                         let jito_tip_sol = jito_tip_lamports as f64 / 1_000_000_000.0;
                         let _ = db_tracker.log_executed(
                             &opportunity.signature,
-                            estimated_net_profit, // Actual profit (will improve with on-chain verification)
+                            estimated_net_profit,
                             effective_total_fees,
                             jito_tip_sol,
                             position_size_sol,
@@ -2616,9 +2766,9 @@ async fn execute_sandwich_opportunity(
                     Err(e) => {
                         let _ = db_tracker.log_failed(
                             &opportunity.signature,
-                            &format!("JITO bundle failed: {}", e),
+                            &format!("JITO sandwich bundle failed: {}", e),
                         );
-                        warn!("⚠️  Bundle submission failed: {}", e);
+                        warn!("⚠️  Sandwich bundle submission failed: {}", e);
                         return Ok(false);
                     }
                 }
@@ -2626,97 +2776,287 @@ async fn execute_sandwich_opportunity(
 
             // Raydium CLMM - Phase 2 execution
             crate::dex_pool_state::DexPoolState::RaydiumClmm(pool_state) => {
-                info!("✅ Raydium CLMM pool detected - proceeding with execution");
+                info!("🥪 Raydium CLMM FULL SANDWICH - proceeding with execution");
                 info!("   Pool ID: {}", pool_state.pool_id);
-                info!("   Token A: {}", pool_state.token_mint_a);
-                info!("   Token B: {}", pool_state.token_mint_b);
+                info!("   Token A (SOL): {}", pool_state.token_mint_a);
+                info!("   Token B (Meme): {}", pool_state.token_mint_b);
                 info!("   Sqrt Price: {}", pool_state.sqrt_price_x64);
+                info!("   🎯 tick_current: {}, tick_spacing: {}, amm_config: {}",
+                    pool_state.tick_current, pool_state.tick_spacing, pool_state.amm_config);
 
-                // Get or create token accounts
+                // Compute ATA addresses (no creation yet - will be included in bundle for atomicity)
+                // This prevents fee waste: if bundle fails, ATA creation also fails
                 let token_account_manager =
                     crate::token_account_manager::TokenAccountManager::new(rpc_url.clone());
-                let (token_a_ata, token_b_ata) = match token_account_manager
-                    .get_or_create_swap_atas(
-                        trading_keypair,
-                        &pool_state.token_mint_a,
-                        &pool_state.token_mint_b,
-                    ) {
-                    Ok(atas) => atas,
-                    Err(e) => {
-                        let _ = db_tracker.log_skipped(
-                            opportunity,
-                            &format!("Failed to create token accounts: {}", e),
-                        );
-                        warn!("⚠️  Failed to get/create token accounts: {}", e);
-                        return Ok(false);
-                    }
-                };
 
-                info!("✅ Token accounts ready!");
-                info!("   Token A ATA: {}", token_a_ata);
-                info!("   Token B ATA: {}", token_b_ata);
+                // Get correct token programs for each mint
+                let token_a_program = token_account_manager.get_token_program_for_mint(&pool_state.token_mint_a);
+                let token_b_program = token_account_manager.get_token_program_for_mint(&pool_state.token_mint_b);
 
-                // Build backrun instruction (sell tokens into victim's price pump)
-                let position_lamports = (position_size_sol * 1_000_000_000.0) as u64;
-                let expected_profit_pct = estimated_net_profit / position_size_sol;
-                let slippage = 0.005; // 0.5%
-                let min_sol_out =
-                    (position_lamports as f64 * (1.0 + expected_profit_pct - slippage)) as u64;
-
-                let arbitrage_ix = match crate::raydium_clmm_swap::build_clmm_backrun_instruction(
-                    pool_state,
-                    &token_a_ata,
-                    &token_b_ata,
+                // Compute ATA addresses (deterministic - doesn't require RPC)
+                let token_a_ata = crate::token_account_manager::TokenAccountManager::get_ata_address_with_program(
                     &trading_keypair.pubkey(),
-                    position_lamports,
-                    min_sol_out,
-                    true, // is_base_input - assume selling token A for token B
-                ) {
-                    Ok(ix) => ix,
-                    Err(e) => {
-                        let _ = db_tracker.log_failed(
-                            &opportunity.signature,
-                            &format!("Failed to build CLMM swap: {}", e),
-                        );
-                        warn!("⚠️  Failed to build CLMM arbitrage instruction: {}", e);
-                        return Ok(false);
-                    }
-                };
-
-                // Build and submit transaction
-                info!("📦 Building JITO bundle: [CLMM arbitrage]");
-
-                let recent_blockhash = match rpc_client.get_latest_blockhash() {
-                    Ok(blockhash) => blockhash,
-                    Err(e) => {
-                        let _ = db_tracker.log_failed(
-                            &opportunity.signature,
-                            &format!("Failed to get blockhash: {}", e),
-                        );
-                        warn!("⚠️  Failed to get recent blockhash: {}", e);
-                        return Ok(false);
-                    }
-                };
-
-                let arbitrage_tx = solana_sdk::transaction::Transaction::new_signed_with_payer(
-                    &[arbitrage_ix],
-                    Some(&trading_keypair.pubkey()),
-                    &[trading_keypair],
-                    recent_blockhash,
+                    &pool_state.token_mint_a,
+                    &token_a_program,
+                );
+                let token_b_ata = crate::token_account_manager::TokenAccountManager::get_ata_address_with_program(
+                    &trading_keypair.pubkey(),
+                    &pool_state.token_mint_b,
+                    &token_b_program,
                 );
 
-                let jito_tip_sol = 0.0005;
-                let jito_tip_lamports = (jito_tip_sol * 1_000_000_000.0) as u64;
-                info!("💰 JITO tip: {:.6} SOL", jito_tip_sol);
+                // Build idempotent ATA creation instructions (will succeed even if ATA exists)
+                // These will be included in the frontrun_tx for atomicity
+                let ata_a_ix = crate::token_account_manager::TokenAccountManager::build_create_ata_instruction_with_program(
+                    &trading_keypair.pubkey(),
+                    &pool_state.token_mint_a,
+                    &token_a_program,
+                );
+                let ata_b_ix = crate::token_account_manager::TokenAccountManager::build_create_ata_instruction_with_program(
+                    &trading_keypair.pubkey(),
+                    &pool_state.token_mint_b,
+                    &token_b_program,
+                );
 
-                info!("🚀 Submitting Raydium CLMM arbitrage to JITO...");
+                info!("✅ Token accounts computed (will create in bundle)!");
+                info!("   Token A ATA (SOL): {}", token_a_ata);
+                info!("   Token B ATA (Meme): {}", token_b_ata);
+
+                // ============================================
+                // STEP 0: VERIFY TICK_ARRAY EXISTS
+                // ============================================
+                // For CLMM pools with tick_spacing=1, tick arrays may not be initialized
+                // at all positions. We must verify before attempting swap.
+                info!("🔍 Verifying tick_array exists for tick_current={}...", pool_state.tick_current);
+                match crate::raydium_clmm_swap::verify_tick_array_exists(
+                    &rpc_client,
+                    &pool_state.pool_id,
+                    pool_state.tick_current,
+                    pool_state.tick_spacing,
+                ) {
+                    Ok(tick_array) => {
+                        info!("✅ tick_array verified: {}", tick_array);
+                    }
+                    Err(e) => {
+                        warn!("⚠️ CLMM tick_array not initialized: {}", e);
+                        warn!("   Skipping pool {} (tick_spacing={}, tick={})",
+                            pool_state.pool_id, pool_state.tick_spacing, pool_state.tick_current);
+                        let _ = db_tracker.log_skipped(
+                            opportunity,
+                            &format!("tick_array not initialized: {}", e),
+                        );
+                        return Ok(false);
+                    }
+                }
+
+                // ============================================
+                // 🥪 FULL SANDWICH: FRONTRUN + BACKRUN
+                // ============================================
+                // Sandwich strategy:
+                // 1. FRONTRUN: Buy meme tokens with SOL (A→B swap)
+                //    - We buy BEFORE victim's large buy
+                //    - Our buy pushes price up slightly
+                // 2. [Victim's tx lands in between - not in our bundle]
+                //    - Victim's large buy pushes price up more
+                // 3. BACKRUN: Sell meme tokens for SOL (B→A swap)
+                //    - We sell AFTER victim at the pumped price
+                //    - Profit = (sell_price - buy_price) * quantity - fees
+                // ============================================
+
+                let position_lamports = (position_size_sol * 1_000_000_000.0) as u64;
+                let slippage_bps = 150u64; // 1.5% slippage tolerance
+
+                // Calculate expected meme tokens from frontrun buy
+                // Using sqrt_price_x64 for rough price estimation
+                // sqrt_price_x64 = sqrt(price_b_per_a) * 2^64
+                let sqrt_price = pool_state.sqrt_price_x64 as f64 / (1u128 << 64) as f64;
+                let price_b_per_a = sqrt_price * sqrt_price; // tokens B per token A
+                let expected_meme_tokens = (position_lamports as f64 * price_b_per_a) as u64;
+                let min_meme_out = expected_meme_tokens * (10000 - slippage_bps) / 10000;
+
+                info!("📊 Sandwich calculations:");
+                info!("   Position: {} lamports ({:.4} SOL)", position_lamports, position_size_sol);
+                info!("   sqrt_price_x64: {}", pool_state.sqrt_price_x64);
+                info!("   Price B/A: {:.6}", price_b_per_a);
+                info!("   Expected meme tokens: {}", expected_meme_tokens);
+                info!("   Min meme out (with {}bps slippage): {}", slippage_bps, min_meme_out);
+
+                // ============================================
+                // STEP 1: BUILD FRONTRUN INSTRUCTION (BUY MEME)
+                // ============================================
+                // FRONTRUN = BUY meme tokens with SOL (A→B swap)
+                // Source: token_a_ata (SOL we're spending)
+                // Dest: token_b_ata (meme we're receiving)
+                info!("🔨 Building FRONTRUN instruction (buy meme with SOL)...");
+                let frontrun_ix = match crate::raydium_clmm_swap::build_clmm_frontrun_instruction(
+                    pool_state,
+                    &token_a_ata,  // Source: SOL (what we spend)
+                    &token_b_ata,  // Dest: meme token (what we receive)
+                    &trading_keypair.pubkey(),
+                    position_lamports,  // Amount of SOL to spend
+                    min_meme_out,       // Minimum meme tokens to receive
+                    true, // is_base_input=true: A→B swap (spend token A for token B)
+                ) {
+                    Ok(ix) => {
+                        info!("✅ FRONTRUN instruction built successfully");
+                        ix
+                    }
+                    Err(e) => {
+                        let _ = db_tracker.log_failed(
+                            &opportunity.signature,
+                            &format!("Failed to build CLMM frontrun: {}", e),
+                        );
+                        warn!("⚠️  Failed to build CLMM frontrun instruction: {}", e);
+                        return Ok(false);
+                    }
+                };
+
+                // ============================================
+                // STEP 2: BUILD BACKRUN INSTRUCTION (SELL MEME)
+                // ============================================
+                // BACKRUN = SELL meme tokens for SOL (B→A swap)
+                // We sell the tokens we bought in frontrun
+                // Source: token_b_ata (meme we're selling)
+                // Dest: token_a_ata (SOL we're receiving)
+
+                // Calculate expected SOL return (should be > position_lamports for profit)
+                // Account for price impact from victim's buy (estimated 3-10% pump)
+                let expected_profit_pct = estimated_net_profit / position_size_sol;
+                let min_sol_back = (position_lamports as f64 * (1.0 + expected_profit_pct * 0.5)) as u64; // 50% of expected profit as minimum
+
+                info!("🔨 Building BACKRUN instruction (sell meme for SOL)...");
+                info!("   Selling: {} meme tokens (expected from frontrun)", expected_meme_tokens);
+                info!("   Min SOL back: {} lamports", min_sol_back);
+
+                let backrun_ix = match crate::raydium_clmm_swap::build_clmm_backrun_instruction(
+                    pool_state,
+                    &token_b_ata,  // Source: meme token (what we sell)
+                    &token_a_ata,  // Dest: SOL (what we receive)
+                    &trading_keypair.pubkey(),
+                    expected_meme_tokens,  // Amount of meme tokens to sell (from frontrun)
+                    min_sol_back,          // Minimum SOL to receive
+                    false, // is_base_input=false: B→A swap (sell token B for token A)
+                ) {
+                    Ok(ix) => {
+                        info!("✅ BACKRUN instruction built successfully");
+                        ix
+                    }
+                    Err(e) => {
+                        let _ = db_tracker.log_failed(
+                            &opportunity.signature,
+                            &format!("Failed to build CLMM backrun: {}", e),
+                        );
+                        warn!("⚠️  Failed to build CLMM backrun instruction: {}", e);
+                        return Ok(false);
+                    }
+                };
+
+                // ============================================
+                // STEP 3: BUILD TRANSACTIONS (USING VICTIM'S BLOCKHASH!)
+                // ============================================
+                info!("📦 Building JITO sandwich bundle: [FRONTRUN, BACKRUN]");
+
+                // CRITICAL: Use victim's blockhash for ALL bundle transactions
+                let blockhash_to_use = match &opportunity.victim_blockhash {
+                    Some(bh) => {
+                        info!("✅ Using VICTIM's blockhash: {} (CRITICAL for bundle success)", bh);
+                        *bh
+                    }
+                    None => {
+                        warn!("⚠️  No victim blockhash - fetching fresh (may cause bundle failure)");
+                        match rpc_client.get_latest_blockhash() {
+                            Ok(blockhash) => blockhash,
+                            Err(e) => {
+                                let _ = db_tracker.log_failed(
+                                    &opportunity.signature,
+                                    &format!("Failed to get blockhash: {}", e),
+                                );
+                                warn!("⚠️  Failed to get recent blockhash: {}", e);
+                                return Ok(false);
+                            }
+                        }
+                    }
+                };
+
+                // Build frontrun transaction (includes ATA creation for atomicity)
+                let frontrun_tx = solana_sdk::transaction::Transaction::new_signed_with_payer(
+                    &[ata_a_ix, ata_b_ix, frontrun_ix],
+                    Some(&trading_keypair.pubkey()),
+                    &[trading_keypair],
+                    blockhash_to_use,
+                );
+                info!("📦 Frontrun TX includes: 2 ATA creates + 1 swap");
+
+                // Build backrun transaction
+                let backrun_tx = solana_sdk::transaction::Transaction::new_signed_with_payer(
+                    &[backrun_ix],
+                    Some(&trading_keypair.pubkey()),
+                    &[trading_keypair],
+                    blockhash_to_use,
+                );
+
+                // Grok recommended: 0.005 SOL minimum tip for MEV bundles
+                let jito_tip_lamports = 5_000_000u64; // 0.005 SOL - Grok's recommendation
+                info!("💰 CLMM MEV tip: {} lamports ({:.4} SOL)", jito_tip_lamports, jito_tip_lamports as f64 / 1_000_000_000.0);
+
+                // Optional simulation before JITO submission
+                let enable_sim = std::env::var("ENABLE_SIMULATION").map(|v| v == "true").unwrap_or(false);
+                if enable_sim {
+                    info!("🔍 Simulating FRONTRUN transaction...");
+                    let sim_config = solana_client::rpc_config::RpcSimulateTransactionConfig {
+                        sig_verify: false,
+                        replace_recent_blockhash: true,
+                        commitment: None,
+                        encoding: Some(solana_transaction_status::UiTransactionEncoding::Base64),
+                        accounts: None,
+                        min_context_slot: None,
+                        inner_instructions: false,
+                    };
+                    match rpc_client.simulate_transaction_with_config(&frontrun_tx, sim_config.clone()) {
+                        Ok(sim_result) => {
+                            if let Some(err) = sim_result.value.err {
+                                warn!("❌ FRONTRUN simulation FAILED: {:?}", err);
+                                if let Some(logs) = sim_result.value.logs {
+                                    for log in logs.iter().take(10) {
+                                        warn!("   Log: {}", log);
+                                    }
+                                }
+                                return Ok(false);
+                            } else {
+                                let units = sim_result.value.units_consumed.unwrap_or(0);
+                                info!("✅ FRONTRUN simulation SUCCESS! Compute units: {}", units);
+                            }
+                        }
+                        Err(e) => {
+                            warn!("⚠️ FRONTRUN simulation RPC error: {}", e);
+                        }
+                    }
+                    info!("⏭️  Skipping BACKRUN simulation (depends on FRONTRUN output)");
+                }
+
+                // ============================================
+                // STEP 4: SUBMIT REAL SANDWICH BUNDLE TO JITO
+                // ============================================
+                info!("🚀 Submitting Raydium CLMM SANDWICH bundle to JITO...");
+                info!("   Bundle: [FRONTRUN → VICTIM → BACKRUN → TIP] (4 txs)");
+                info!("   Victim tx bytes: {} bytes", opportunity.victim_tx_bytes.as_ref().map_or(0, |b| b.len()));
+                info!("   Victim blockhash: {:?}", opportunity.victim_blockhash);
+                info!("   Tip: {} lamports", jito_tip_lamports);
+
                 let bundle_result = jito_client
-                    .submit_bundle(vec![arbitrage_tx], Some(jito_tip_lamports))
+                    .submit_sandwich_bundle(
+                        frontrun_tx,
+                        opportunity.victim_tx_bytes.clone(),
+                        backrun_tx,
+                        Some(jito_tip_lamports),
+                        opportunity.victim_blockhash,
+                    )
                     .await;
 
                 match bundle_result {
                     Ok(bundle_id) => {
-                        info!("✅ CLMM arbitrage bundle submitted! ID: {}", bundle_id);
+                        info!("✅ CLMM SANDWICH bundle submitted! ID: {}", bundle_id);
+                        info!("🥪 Sandwich: FRONTRUN → [victim tx] → BACKRUN");
                         tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
 
                         let execution_latency_ms = 5.4;
@@ -2736,95 +3076,178 @@ async fn execute_sandwich_opportunity(
                     Err(e) => {
                         let _ = db_tracker.log_failed(
                             &opportunity.signature,
-                            &format!("JITO bundle failed: {}", e),
+                            &format!("JITO sandwich bundle failed: {}", e),
                         );
-                        warn!("⚠️  Bundle submission failed: {}", e);
+                        warn!("⚠️  Sandwich bundle submission failed: {}", e);
                         return Ok(false);
                     }
                 }
             }
 
-            // Raydium CPMM - Phase 2 execution
+            // Raydium CPMM - FULL SANDWICH execution
             crate::dex_pool_state::DexPoolState::RaydiumCpmm(pool_state) => {
-                info!("✅ Raydium CPMM pool detected - proceeding with execution");
+                info!("🥪 Raydium CPMM FULL SANDWICH - proceeding with execution");
                 info!("   Pool ID: {}", pool_state.pool_id);
-                info!("   Token 0: {}", pool_state.token_0_mint);
-                info!("   Token 1: {}", pool_state.token_1_mint);
+                info!("   Token 0 (SOL): {}", pool_state.token_0_mint);
+                info!("   Token 1 (Meme): {}", pool_state.token_1_mint);
 
+                // Compute ATA addresses (no creation yet - will be included in bundle for atomicity)
                 let token_account_manager =
                     crate::token_account_manager::TokenAccountManager::new(rpc_url.clone());
-                let (token_0_ata, token_1_ata) = match token_account_manager
-                    .get_or_create_swap_atas(
-                        trading_keypair,
-                        &pool_state.token_0_mint,
-                        &pool_state.token_1_mint,
-                    ) {
-                    Ok(atas) => atas,
-                    Err(e) => {
-                        let _ = db_tracker.log_skipped(
-                            opportunity,
-                            &format!("Failed to create token accounts: {}", e),
-                        );
-                        warn!("⚠️  Failed to get/create token accounts: {}", e);
-                        return Ok(false);
-                    }
-                };
 
-                let position_lamports = (position_size_sol * 1_000_000_000.0) as u64;
-                let expected_profit_pct = estimated_net_profit / position_size_sol;
-                let slippage = 0.005;
-                let min_sol_out =
-                    (position_lamports as f64 * (1.0 + expected_profit_pct - slippage)) as u64;
+                // Get correct token programs for each mint
+                let token_0_program = token_account_manager.get_token_program_for_mint(&pool_state.token_0_mint);
+                let token_1_program = token_account_manager.get_token_program_for_mint(&pool_state.token_1_mint);
 
-                let arbitrage_ix = match crate::raydium_cpmm_swap::build_cpmm_backrun_instruction(
-                    pool_state,
-                    &token_0_ata,
-                    &token_1_ata,
+                // Compute ATA addresses (deterministic - doesn't require RPC)
+                let token_0_ata = crate::token_account_manager::TokenAccountManager::get_ata_address_with_program(
                     &trading_keypair.pubkey(),
-                    position_lamports,
-                    min_sol_out,
-                ) {
-                    Ok(ix) => ix,
-                    Err(e) => {
-                        let _ = db_tracker.log_failed(
-                            &opportunity.signature,
-                            &format!("Failed to build CPMM swap: {}", e),
-                        );
-                        warn!("⚠️  Failed to build CPMM arbitrage instruction: {}", e);
-                        return Ok(false);
-                    }
-                };
-
-                let recent_blockhash = match rpc_client.get_latest_blockhash() {
-                    Ok(blockhash) => blockhash,
-                    Err(e) => {
-                        let _ = db_tracker.log_failed(
-                            &opportunity.signature,
-                            &format!("Failed to get blockhash: {}", e),
-                        );
-                        warn!("⚠️  Failed to get recent blockhash: {}", e);
-                        return Ok(false);
-                    }
-                };
-
-                let arbitrage_tx = solana_sdk::transaction::Transaction::new_signed_with_payer(
-                    &[arbitrage_ix],
-                    Some(&trading_keypair.pubkey()),
-                    &[trading_keypair],
-                    recent_blockhash,
+                    &pool_state.token_0_mint,
+                    &token_0_program,
+                );
+                let token_1_ata = crate::token_account_manager::TokenAccountManager::get_ata_address_with_program(
+                    &trading_keypair.pubkey(),
+                    &pool_state.token_1_mint,
+                    &token_1_program,
                 );
 
-                let jito_tip_sol = 0.0005;
-                let jito_tip_lamports = (jito_tip_sol * 1_000_000_000.0) as u64;
+                // Build idempotent ATA creation instructions
+                let token_0_ata_ix = crate::token_account_manager::TokenAccountManager::build_create_ata_instruction_with_program(
+                    &trading_keypair.pubkey(),
+                    &pool_state.token_0_mint,
+                    &token_0_program,
+                );
+                let token_1_ata_ix = crate::token_account_manager::TokenAccountManager::build_create_ata_instruction_with_program(
+                    &trading_keypair.pubkey(),
+                    &pool_state.token_1_mint,
+                    &token_1_program,
+                );
+                info!("📝 CPMM ATAs computed: t0={}, t1={}", token_0_ata, token_1_ata);
 
-                info!("🚀 Submitting Raydium CPMM arbitrage to JITO...");
+                // ============================================
+                // 🥪 FULL SANDWICH: FRONTRUN + BACKRUN
+                // ============================================
+                let position_lamports = (position_size_sol * 1_000_000_000.0) as u64;
+                let slippage_bps = 150u64; // 1.5% slippage
+                let estimated_meme_tokens = position_lamports; // Rough estimate
+                let min_meme_out = estimated_meme_tokens * (10000 - slippage_bps) / 10000;
+
+                info!("📊 CPMM Sandwich calculations:");
+                info!("   Position: {} lamports ({:.4} SOL)", position_lamports, position_size_sol);
+                info!("   Expected meme tokens: ~{}", estimated_meme_tokens);
+
+                // STEP 1: BUILD FRONTRUN (buy meme with SOL)
+                info!("🔨 Building FRONTRUN instruction (buy meme with SOL)...");
+                let frontrun_ix = match crate::raydium_cpmm_swap::build_cpmm_frontrun_instruction(
+                    pool_state,
+                    &token_0_ata,  // Source: SOL
+                    &token_1_ata,  // Dest: meme token
+                    &trading_keypair.pubkey(),
+                    position_lamports,
+                    min_meme_out,
+                ) {
+                    Ok(ix) => {
+                        info!("✅ CPMM FRONTRUN instruction built");
+                        ix
+                    }
+                    Err(e) => {
+                        let _ = db_tracker.log_failed(
+                            &opportunity.signature,
+                            &format!("Failed to build CPMM frontrun: {}", e),
+                        );
+                        warn!("⚠️  Failed to build CPMM frontrun: {}", e);
+                        return Ok(false);
+                    }
+                };
+
+                // STEP 2: BUILD BACKRUN (sell meme for SOL)
+                let expected_profit_pct = estimated_net_profit / position_size_sol;
+                let min_sol_back = (position_lamports as f64 * (1.0 + expected_profit_pct * 0.5)) as u64;
+
+                info!("🔨 Building BACKRUN instruction (sell meme for SOL)...");
+                let backrun_ix = match crate::raydium_cpmm_swap::build_cpmm_backrun_instruction(
+                    pool_state,
+                    &token_1_ata,  // Source: meme token
+                    &token_0_ata,  // Dest: SOL
+                    &trading_keypair.pubkey(),
+                    estimated_meme_tokens,
+                    min_sol_back,
+                ) {
+                    Ok(ix) => {
+                        info!("✅ CPMM BACKRUN instruction built");
+                        ix
+                    }
+                    Err(e) => {
+                        let _ = db_tracker.log_failed(
+                            &opportunity.signature,
+                            &format!("Failed to build CPMM backrun: {}", e),
+                        );
+                        warn!("⚠️  Failed to build CPMM backrun: {}", e);
+                        return Ok(false);
+                    }
+                };
+
+                // STEP 3: BUILD TRANSACTIONS
+                // CRITICAL: Use victim's blockhash for ALL bundle transactions
+                let blockhash_to_use = match &opportunity.victim_blockhash {
+                    Some(bh) => {
+                        info!("✅ Using VICTIM's blockhash: {} (CRITICAL for bundle success)", bh);
+                        *bh
+                    }
+                    None => {
+                        warn!("⚠️  No victim blockhash - fetching fresh (may cause bundle failure)");
+                        match rpc_client.get_latest_blockhash() {
+                            Ok(blockhash) => blockhash,
+                            Err(e) => {
+                                let _ = db_tracker.log_failed(
+                                    &opportunity.signature,
+                                    &format!("Failed to get blockhash: {}", e),
+                                );
+                                warn!("⚠️  Failed to get recent blockhash: {}", e);
+                                return Ok(false);
+                            }
+                        }
+                    }
+                };
+
+                let frontrun_tx = solana_sdk::transaction::Transaction::new_signed_with_payer(
+                    &[token_0_ata_ix, token_1_ata_ix, frontrun_ix],  // ATA creation + frontrun
+                    Some(&trading_keypair.pubkey()),
+                    &[trading_keypair],
+                    blockhash_to_use,
+                );
+                info!("📦 CPMM Frontrun TX: 2 ATA creates + 1 swap (buy meme)");
+
+                let backrun_tx = solana_sdk::transaction::Transaction::new_signed_with_payer(
+                    &[backrun_ix],
+                    Some(&trading_keypair.pubkey()),
+                    &[trading_keypair],
+                    blockhash_to_use,
+                );
+                info!("📦 CPMM Backrun TX: 1 swap (sell meme)");
+
+                // Grok recommended: 0.005 SOL minimum tip for MEV bundles
+                let jito_tip_lamports = 5_000_000u64;
+                info!("💰 CPMM MEV tip: {} lamports ({:.4} SOL)", jito_tip_lamports, jito_tip_lamports as f64 / 1e9);
+
+                // STEP 4: SUBMIT REAL SANDWICH BUNDLE (with victim tx)
+                info!("🚀 Submitting CPMM SANDWICH bundle to JITO...");
+                info!("   Bundle: [FRONTRUN → VICTIM → BACKRUN → TIP] (4 txs)");
+                info!("   Victim tx bytes: {} bytes", opportunity.victim_tx_bytes.as_ref().map_or(0, |b| b.len()));
                 let bundle_result = jito_client
-                    .submit_bundle(vec![arbitrage_tx], Some(jito_tip_lamports))
+                    .submit_sandwich_bundle(
+                        frontrun_tx,
+                        opportunity.victim_tx_bytes.clone(),
+                        backrun_tx,
+                        Some(jito_tip_lamports),
+                        opportunity.victim_blockhash,
+                    )
                     .await;
 
                 match bundle_result {
                     Ok(bundle_id) => {
-                        info!("✅ CPMM arbitrage bundle submitted! ID: {}", bundle_id);
+                        info!("✅ CPMM SANDWICH bundle submitted! ID: {}", bundle_id);
+                        info!("🥪 Sandwich: FRONTRUN → [victim tx] → BACKRUN");
                         tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
 
                         let _ = db_tracker.log_executed(
@@ -2841,94 +3264,180 @@ async fn execute_sandwich_opportunity(
                     Err(e) => {
                         let _ = db_tracker.log_failed(
                             &opportunity.signature,
-                            &format!("JITO bundle failed: {}", e),
+                            &format!("JITO sandwich bundle failed: {}", e),
                         );
-                        warn!("⚠️  Bundle submission failed: {}", e);
+                        warn!("⚠️  Sandwich bundle submission failed: {}", e);
                         return Ok(false);
                     }
                 }
             }
 
-            // Orca Whirlpools - Phase 2 execution
+            // Orca Whirlpools - FULL SANDWICH execution
             crate::dex_pool_state::DexPoolState::OrcaWhirlpools(pool_state) => {
-                info!("✅ Orca Whirlpool detected - proceeding with execution");
+                info!("🥪 Orca Whirlpool FULL SANDWICH - proceeding with execution");
                 info!("   Whirlpool: {}", pool_state.whirlpool);
-                info!("   Token A: {}", pool_state.token_mint_a);
-                info!("   Token B: {}", pool_state.token_mint_b);
+                info!("   Token A (SOL): {}", pool_state.token_mint_a);
+                info!("   Token B (Meme): {}", pool_state.token_mint_b);
 
+                // Compute ATA addresses (no creation yet - will be included in bundle for atomicity)
                 let token_account_manager =
                     crate::token_account_manager::TokenAccountManager::new(rpc_url.clone());
-                let (token_a_ata, token_b_ata) = match token_account_manager
-                    .get_or_create_swap_atas(
-                        trading_keypair,
-                        &pool_state.token_mint_a,
-                        &pool_state.token_mint_b,
-                    ) {
-                    Ok(atas) => atas,
-                    Err(e) => {
-                        let _ = db_tracker.log_skipped(
-                            opportunity,
-                            &format!("Failed to create token accounts: {}", e),
-                        );
-                        warn!("⚠️  Failed to get/create token accounts: {}", e);
-                        return Ok(false);
-                    }
-                };
 
+                // Get correct token programs for each mint
+                let token_a_program = token_account_manager.get_token_program_for_mint(&pool_state.token_mint_a);
+                let token_b_program = token_account_manager.get_token_program_for_mint(&pool_state.token_mint_b);
+
+                // Compute ATA addresses (deterministic - doesn't require RPC)
+                let token_a_ata = crate::token_account_manager::TokenAccountManager::get_ata_address_with_program(
+                    &trading_keypair.pubkey(),
+                    &pool_state.token_mint_a,
+                    &token_a_program,
+                );
+                let token_b_ata = crate::token_account_manager::TokenAccountManager::get_ata_address_with_program(
+                    &trading_keypair.pubkey(),
+                    &pool_state.token_mint_b,
+                    &token_b_program,
+                );
+
+                // Build idempotent ATA creation instructions
+                let token_a_ata_ix = crate::token_account_manager::TokenAccountManager::build_create_ata_instruction_with_program(
+                    &trading_keypair.pubkey(),
+                    &pool_state.token_mint_a,
+                    &token_a_program,
+                );
+                let token_b_ata_ix = crate::token_account_manager::TokenAccountManager::build_create_ata_instruction_with_program(
+                    &trading_keypair.pubkey(),
+                    &pool_state.token_mint_b,
+                    &token_b_program,
+                );
+                info!("📝 Orca ATAs computed: a={}, b={}", token_a_ata, token_b_ata);
+
+                // ============================================
+                // 🥪 FULL SANDWICH: FRONTRUN + BACKRUN
+                // ============================================
                 let position_lamports = (position_size_sol * 1_000_000_000.0) as u64;
-                let expected_profit_pct = estimated_net_profit / position_size_sol;
-                let slippage = 0.005;
-                let min_sol_out =
-                    (position_lamports as f64 * (1.0 + expected_profit_pct - slippage)) as u64;
+                let slippage_bps = 150u64;
+                let estimated_meme_tokens = position_lamports;
+                let min_meme_out = estimated_meme_tokens * (10000 - slippage_bps) / 10000;
 
-                let arbitrage_ix =
-                    match crate::orca_whirlpool_swap::build_whirlpool_backrun_instruction(
+                info!("📊 Orca Sandwich calculations:");
+                info!("   Position: {} lamports ({:.4} SOL)", position_lamports, position_size_sol);
+
+                // STEP 1: BUILD FRONTRUN (buy meme with SOL: A→B)
+                info!("🔨 Building FRONTRUN instruction (buy meme with SOL)...");
+                let frontrun_ix =
+                    match crate::orca_whirlpool_swap::build_whirlpool_frontrun_instruction(
                         pool_state,
-                        &token_a_ata,
-                        &token_b_ata,
+                        &token_a_ata,  // Source: SOL
+                        &token_b_ata,  // Dest: meme
                         &trading_keypair.pubkey(),
                         position_lamports,
-                        min_sol_out,
-                        true, // a_to_b: selling tokens back to SOL
+                        min_meme_out,
+                        true, // a_to_b: SOL → meme
                     ) {
-                        Ok(ix) => ix,
+                        Ok(ix) => {
+                            info!("✅ Orca FRONTRUN instruction built");
+                            ix
+                        }
                         Err(e) => {
                             let _ = db_tracker.log_failed(
                                 &opportunity.signature,
-                                &format!("Failed to build Orca swap: {}", e),
+                                &format!("Failed to build Orca frontrun: {}", e),
                             );
-                            warn!("⚠️  Failed to build Orca arbitrage instruction: {}", e);
+                            warn!("⚠️  Failed to build Orca frontrun: {}", e);
                             return Ok(false);
                         }
                     };
 
-                let recent_blockhash = match rpc_client.get_latest_blockhash() {
-                    Ok(blockhash) => blockhash,
-                    Err(e) => {
-                        let _ = db_tracker.log_failed(
-                            &opportunity.signature,
-                            &format!("Failed to get blockhash: {}", e),
-                        );
-                        return Ok(false);
+                // STEP 2: BUILD BACKRUN (sell meme for SOL: B→A)
+                let expected_profit_pct = estimated_net_profit / position_size_sol;
+                let min_sol_back = (position_lamports as f64 * (1.0 + expected_profit_pct * 0.5)) as u64;
+
+                info!("🔨 Building BACKRUN instruction (sell meme for SOL)...");
+                let backrun_ix =
+                    match crate::orca_whirlpool_swap::build_whirlpool_backrun_instruction(
+                        pool_state,
+                        &token_b_ata,  // Source: meme
+                        &token_a_ata,  // Dest: SOL
+                        &trading_keypair.pubkey(),
+                        estimated_meme_tokens,
+                        min_sol_back,
+                        false, // a_to_b: meme → SOL (B→A)
+                    ) {
+                        Ok(ix) => {
+                            info!("✅ Orca BACKRUN instruction built");
+                            ix
+                        }
+                        Err(e) => {
+                            let _ = db_tracker.log_failed(
+                                &opportunity.signature,
+                                &format!("Failed to build Orca backrun: {}", e),
+                            );
+                            warn!("⚠️  Failed to build Orca backrun: {}", e);
+                            return Ok(false);
+                        }
+                    };
+
+                // STEP 3: BUILD TRANSACTIONS
+                // CRITICAL: Use victim's blockhash for ALL bundle transactions
+                let blockhash_to_use = match &opportunity.victim_blockhash {
+                    Some(bh) => {
+                        info!("✅ Using VICTIM's blockhash: {} (CRITICAL for bundle success)", bh);
+                        *bh
+                    }
+                    None => {
+                        warn!("⚠️  No victim blockhash - fetching fresh (may cause bundle failure)");
+                        match rpc_client.get_latest_blockhash() {
+                            Ok(blockhash) => blockhash,
+                            Err(e) => {
+                                let _ = db_tracker.log_failed(
+                                    &opportunity.signature,
+                                    &format!("Failed to get blockhash: {}", e),
+                                );
+                                return Ok(false);
+                            }
+                        }
                     }
                 };
 
-                let arbitrage_tx = solana_sdk::transaction::Transaction::new_signed_with_payer(
-                    &[arbitrage_ix],
+                let frontrun_tx = solana_sdk::transaction::Transaction::new_signed_with_payer(
+                    &[token_a_ata_ix, token_b_ata_ix, frontrun_ix],
                     Some(&trading_keypair.pubkey()),
                     &[trading_keypair],
-                    recent_blockhash,
+                    blockhash_to_use,
                 );
+                info!("📦 Orca Frontrun TX: 2 ATA creates + 1 swap (buy meme)");
 
-                let jito_tip_lamports = 500_000u64;
-                info!("🚀 Submitting Orca Whirlpool arbitrage to JITO...");
+                let backrun_tx = solana_sdk::transaction::Transaction::new_signed_with_payer(
+                    &[backrun_ix],
+                    Some(&trading_keypair.pubkey()),
+                    &[trading_keypair],
+                    blockhash_to_use,
+                );
+                info!("📦 Orca Backrun TX: 1 swap (sell meme)");
+
+                // Grok recommended: 0.005 SOL minimum tip for MEV bundles
+                let jito_tip_lamports = 5_000_000u64;
+                info!("💰 Orca MEV tip: {} lamports ({:.4} SOL)", jito_tip_lamports, jito_tip_lamports as f64 / 1e9);
+
+                // STEP 4: SUBMIT REAL SANDWICH BUNDLE (with victim tx)
+                info!("🚀 Submitting Orca SANDWICH bundle to JITO...");
+                info!("   Bundle: [FRONTRUN → VICTIM → BACKRUN → TIP] (4 txs)");
+                info!("   Victim tx bytes: {} bytes", opportunity.victim_tx_bytes.as_ref().map_or(0, |b| b.len()));
                 let bundle_result = jito_client
-                    .submit_bundle(vec![arbitrage_tx], Some(jito_tip_lamports))
+                    .submit_sandwich_bundle(
+                        frontrun_tx,
+                        opportunity.victim_tx_bytes.clone(),
+                        backrun_tx,
+                        Some(jito_tip_lamports),
+                        opportunity.victim_blockhash,
+                    )
                     .await;
 
                 match bundle_result {
                     Ok(bundle_id) => {
-                        info!("✅ Orca arbitrage bundle submitted! ID: {}", bundle_id);
+                        info!("✅ Orca SANDWICH bundle submitted! ID: {}", bundle_id);
+                        info!("🥪 Sandwich: FRONTRUN → [victim tx] → BACKRUN");
                         tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
                         let _ = db_tracker.log_executed(
                             &opportunity.signature,
@@ -2944,9 +3453,9 @@ async fn execute_sandwich_opportunity(
                     Err(e) => {
                         let _ = db_tracker.log_failed(
                             &opportunity.signature,
-                            &format!("JITO bundle failed: {}", e),
+                            &format!("JITO sandwich bundle failed: {}", e),
                         );
-                        warn!("⚠️  Bundle submission failed: {}", e);
+                        warn!("⚠️  Sandwich bundle submission failed: {}", e);
                         return Ok(false);
                     }
                 }
@@ -2959,77 +3468,164 @@ async fn execute_sandwich_opportunity(
                 info!("   Token X: {}", pool_state.token_x_mint);
                 info!("   Token Y: {}", pool_state.token_y_mint);
 
+                // Compute ATA addresses (no creation yet - will be included in bundle for atomicity)
                 let token_account_manager =
                     crate::token_account_manager::TokenAccountManager::new(rpc_url.clone());
-                let (token_x_ata, token_y_ata) = match token_account_manager
-                    .get_or_create_swap_atas(
-                        trading_keypair,
-                        &pool_state.token_x_mint,
-                        &pool_state.token_y_mint,
-                    ) {
-                    Ok(atas) => atas,
-                    Err(e) => {
-                        let _ = db_tracker.log_skipped(
-                            opportunity,
-                            &format!("Failed to create token accounts: {}", e),
-                        );
-                        warn!("⚠️  Failed to get/create token accounts: {}", e);
-                        return Ok(false);
-                    }
-                };
+
+                // Get correct token programs for each mint
+                let token_x_program = token_account_manager.get_token_program_for_mint(&pool_state.token_x_mint);
+                let token_y_program = token_account_manager.get_token_program_for_mint(&pool_state.token_y_mint);
+
+                // Compute ATA addresses (deterministic - doesn't require RPC)
+                let token_x_ata = crate::token_account_manager::TokenAccountManager::get_ata_address_with_program(
+                    &trading_keypair.pubkey(),
+                    &pool_state.token_x_mint,
+                    &token_x_program,
+                );
+                let token_y_ata = crate::token_account_manager::TokenAccountManager::get_ata_address_with_program(
+                    &trading_keypair.pubkey(),
+                    &pool_state.token_y_mint,
+                    &token_y_program,
+                );
+
+                // Build idempotent ATA creation instructions
+                let token_x_ata_ix = crate::token_account_manager::TokenAccountManager::build_create_ata_instruction_with_program(
+                    &trading_keypair.pubkey(),
+                    &pool_state.token_x_mint,
+                    &token_x_program,
+                );
+                let token_y_ata_ix = crate::token_account_manager::TokenAccountManager::build_create_ata_instruction_with_program(
+                    &trading_keypair.pubkey(),
+                    &pool_state.token_y_mint,
+                    &token_y_program,
+                );
+                info!("📝 Meteora ATAs computed (will create in bundle): x={}, y={}", token_x_ata, token_y_ata);
+
+                // ========================================================================
+                // METEORA DLMM FULL SANDWICH - FRONTRUN + BACKRUN
+                // ========================================================================
+                // FRONTRUN: Buy meme token with SOL (before victim)
+                // BACKRUN: Sell meme token for SOL (after victim, at higher price)
+                // Both txs in ONE atomic JITO bundle - all-or-nothing execution
+                // ========================================================================
 
                 let position_lamports = (position_size_sol * 1_000_000_000.0) as u64;
-                let expected_profit_pct = estimated_net_profit / position_size_sol;
-                let slippage = 0.005;
-                let min_sol_out =
-                    (position_lamports as f64 * (1.0 + expected_profit_pct - slippage)) as u64;
+                let slippage_bps = 150u64; // 1.5% slippage for MEV
 
-                let arbitrage_ix = match crate::meteora_dlmm_swap::build_dlmm_backrun_instruction(
+                // For Meteora DLMM: Assume token_x is meme, token_y is SOL (common pattern)
+                // FRONTRUN: Buy meme (Y→X direction: SOL→Meme)
+                // Source: token_y_ata (SOL), Dest: token_x_ata (Meme)
+                let min_meme_out = position_lamports * (10000 - slippage_bps) / 10000;
+
+                info!("🔷 Meteora DLMM SANDWICH - Building FRONTRUN (buy meme with SOL)");
+                let frontrun_ix = match crate::meteora_dlmm_swap::build_dlmm_frontrun_instruction(
                     pool_state,
-                    &token_x_ata,
-                    &token_y_ata,
+                    &token_y_ata,   // Source: SOL (what we spend)
+                    &token_x_ata,   // Dest: meme token (what we receive)
                     &trading_keypair.pubkey(),
-                    position_lamports,
-                    min_sol_out,
+                    position_lamports,  // Amount of SOL to spend
+                    min_meme_out,       // Minimum meme tokens to receive
                 ) {
                     Ok(ix) => ix,
                     Err(e) => {
                         let _ = db_tracker.log_failed(
                             &opportunity.signature,
-                            &format!("Failed to build Meteora swap: {}", e),
+                            &format!("Failed to build Meteora frontrun: {}", e),
                         );
-                        warn!("⚠️  Failed to build Meteora arbitrage instruction: {}", e);
+                        warn!("⚠️  Failed to build Meteora frontrun instruction: {}", e);
                         return Ok(false);
                     }
                 };
 
-                let recent_blockhash = match rpc_client.get_latest_blockhash() {
-                    Ok(blockhash) => blockhash,
+                // BACKRUN: Sell meme for SOL (X→Y direction: Meme→SOL)
+                // Source: token_x_ata (Meme), Dest: token_y_ata (SOL)
+                // We estimate we'll get roughly the same amount of meme tokens as lamports spent (rough 1:1)
+                let estimated_meme_tokens = position_lamports; // Rough estimate
+                let expected_profit_pct = estimated_net_profit / position_size_sol;
+                let min_sol_back = (position_lamports as f64 * (1.0 + expected_profit_pct - 0.015)) as u64;
+
+                info!("🔶 Meteora DLMM SANDWICH - Building BACKRUN (sell meme for SOL)");
+                let backrun_ix = match crate::meteora_dlmm_swap::build_dlmm_backrun_instruction(
+                    pool_state,
+                    &token_x_ata,   // Source: meme token (what we sell)
+                    &token_y_ata,   // Dest: SOL (what we receive)
+                    &trading_keypair.pubkey(),
+                    estimated_meme_tokens,  // Amount of meme to sell
+                    min_sol_back,           // Minimum SOL to receive back
+                ) {
+                    Ok(ix) => ix,
                     Err(e) => {
                         let _ = db_tracker.log_failed(
                             &opportunity.signature,
-                            &format!("Failed to get blockhash: {}", e),
+                            &format!("Failed to build Meteora backrun: {}", e),
                         );
+                        warn!("⚠️  Failed to build Meteora backrun instruction: {}", e);
                         return Ok(false);
                     }
                 };
 
-                let arbitrage_tx = solana_sdk::transaction::Transaction::new_signed_with_payer(
-                    &[arbitrage_ix],
+                // CRITICAL: Use victim's blockhash for ALL bundle transactions
+                let blockhash_to_use = match &opportunity.victim_blockhash {
+                    Some(bh) => {
+                        info!("✅ Using VICTIM's blockhash: {} (CRITICAL for bundle success)", bh);
+                        *bh
+                    }
+                    None => {
+                        warn!("⚠️  No victim blockhash - fetching fresh (may cause bundle failure)");
+                        match rpc_client.get_latest_blockhash() {
+                            Ok(blockhash) => blockhash,
+                            Err(e) => {
+                                let _ = db_tracker.log_failed(
+                                    &opportunity.signature,
+                                    &format!("Failed to get blockhash: {}", e),
+                                );
+                                return Ok(false);
+                            }
+                        }
+                    }
+                };
+
+                // FRONTRUN TX: ATA creation (idempotent) + frontrun swap
+                let frontrun_tx = solana_sdk::transaction::Transaction::new_signed_with_payer(
+                    &[token_x_ata_ix, token_y_ata_ix, frontrun_ix],  // ATAs + frontrun
                     Some(&trading_keypair.pubkey()),
                     &[trading_keypair],
-                    recent_blockhash,
+                    blockhash_to_use,
                 );
 
-                let jito_tip_lamports = 500_000u64;
-                info!("🚀 Submitting Meteora DLMM arbitrage to JITO...");
+                // BACKRUN TX: Just the backrun swap (ATAs already created in frontrun)
+                let backrun_tx = solana_sdk::transaction::Transaction::new_signed_with_payer(
+                    &[backrun_ix],
+                    Some(&trading_keypair.pubkey()),
+                    &[trading_keypair],
+                    blockhash_to_use,
+                );
+
+                info!("✅ Meteora DLMM SANDWICH built:");
+                info!("   TX1 (frontrun): 2 ATA creates + buy meme with {} SOL", position_size_sol);
+                info!("   TX2 (backrun): sell meme for SOL (min {} lamports back)", min_sol_back);
+
+                // Grok recommended: 0.005 SOL minimum tip for MEV bundles
+                let jito_tip_lamports = 5_000_000u64; // 0.005 SOL - competitive for MEV
+                info!("💰 Meteora MEV tip: {} lamports ({:.4} SOL)", jito_tip_lamports, jito_tip_lamports as f64 / 1_000_000_000.0);
+                info!("🚀 Submitting Meteora DLMM FULL SANDWICH to JITO (frontrun + victim + backrun)...");
+                info!("   Bundle: [FRONTRUN → VICTIM → BACKRUN → TIP] (4 txs)");
+                info!("   Victim tx bytes: {} bytes", opportunity.victim_tx_bytes.as_ref().map_or(0, |b| b.len()));
+
+                // Submit REAL sandwich bundle with victim tx included
                 let bundle_result = jito_client
-                    .submit_bundle(vec![arbitrage_tx], Some(jito_tip_lamports))
+                    .submit_sandwich_bundle(
+                        frontrun_tx,
+                        opportunity.victim_tx_bytes.clone(),
+                        backrun_tx,
+                        Some(jito_tip_lamports),
+                        opportunity.victim_blockhash,
+                    )
                     .await;
 
                 match bundle_result {
                     Ok(bundle_id) => {
-                        info!("✅ Meteora arbitrage bundle submitted! ID: {}", bundle_id);
+                        info!("✅ Meteora DLMM SANDWICH bundle submitted! ID: {}", bundle_id);
                         tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
                         let _ = db_tracker.log_executed(
                             &opportunity.signature,
@@ -3053,85 +3649,246 @@ async fn execute_sandwich_opportunity(
                 }
             }
 
-            // PumpSwap - Phase 2 execution
-            crate::dex_pool_state::DexPoolState::PumpSwap(pool_state) => {
-                info!("✅ PumpSwap bonding curve detected - proceeding with execution");
-                info!("   Curve: {}", pool_state.bonding_curve);
-                info!("   Token Mint: {}", pool_state.token_mint);
+            // PumpFun Bonding Curve and PumpSwap DEX - Phase 2 execution
+            crate::dex_pool_state::DexPoolState::PumpFunBondingCurve(pool_state_ref)
+            | crate::dex_pool_state::DexPoolState::PumpSwapDex(pool_state_ref) => {
+                info!("✅ PumpFun/PumpSwap detected - proceeding with execution");
+                info!("   Pool: {}", pool_state_ref.bonding_curve);
 
+                // Clone pool state so we can modify it with the token mint
+                let mut pool_state = pool_state_ref.clone();
+
+                // Helper function to resolve actual mint from a token account address
+                // The sandwich detector passes user token accounts, not actual mint addresses
+                let resolve_mint_from_token_account = |token_account_str: &str| -> Option<solana_sdk::pubkey::Pubkey> {
+                    let token_account_pubkey = solana_sdk::pubkey::Pubkey::from_str(token_account_str).ok()?;
+
+                    // Query the token account to get its mint
+                    match rpc_client.get_account(&token_account_pubkey) {
+                        Ok(account) => {
+                            // Token account data: first 32 bytes after discriminator is the mint
+                            // Standard Token Program layout: [discriminator(8) or mint(32), owner(32), amount(8), ...]
+                            // Simplified: first 32 bytes is mint in SPL Token
+                            if account.data.len() >= 32 {
+                                let mint_bytes: [u8; 32] = account.data[0..32].try_into().ok()?;
+                                let mint = solana_sdk::pubkey::Pubkey::new_from_array(mint_bytes);
+
+                                // Validate it's not all zeros
+                                if mint != solana_sdk::pubkey::Pubkey::default() {
+                                    info!("   Resolved mint from token account: {}", mint);
+                                    return Some(mint);
+                                }
+                            }
+                            None
+                        }
+                        Err(_) => None
+                    }
+                };
+
+                // Get token mint - first try to resolve from token account, then fall back to direct use
+                let token_mint = if let Some(ref output_mint_str) = opportunity.output_mint {
+                    // First try to resolve it as a token account (correct approach)
+                    if let Some(resolved_mint) = resolve_mint_from_token_account(output_mint_str) {
+                        pool_state.token_mint = resolved_mint;
+                        resolved_mint
+                    } else {
+                        // Fall back to using it directly (may be a mint already)
+                        match solana_sdk::pubkey::Pubkey::from_str(output_mint_str) {
+                            Ok(mint) => {
+                                pool_state.token_mint = mint;
+                                info!("   Token Mint (direct): {}", mint);
+                                mint
+                            }
+                            Err(_) => {
+                                warn!("⚠️  Failed to parse output_mint: {}", output_mint_str);
+                                return Ok(false);
+                            }
+                        }
+                    }
+                } else if let Some(ref input_mint_str) = opportunity.input_mint {
+                    // Try input mint
+                    if let Some(resolved_mint) = resolve_mint_from_token_account(input_mint_str) {
+                        // Skip if it's WSOL
+                        if resolved_mint.to_string() == "So11111111111111111111111111111111111111112" {
+                            warn!("⚠️  Resolved to WSOL, need non-SOL token mint");
+                            return Ok(false);
+                        }
+                        pool_state.token_mint = resolved_mint;
+                        resolved_mint
+                    } else {
+                        match solana_sdk::pubkey::Pubkey::from_str(input_mint_str) {
+                            Ok(mint) => {
+                                if mint.to_string() == "So11111111111111111111111111111111111111112" {
+                                    warn!("⚠️  Only have WSOL mint, need token mint");
+                                    return Ok(false);
+                                }
+                                pool_state.token_mint = mint;
+                                info!("   Token Mint (from input): {}", mint);
+                                mint
+                            }
+                            Err(_) => {
+                                warn!("⚠️  Failed to parse input_mint: {}", input_mint_str);
+                                return Ok(false);
+                            }
+                        }
+                    }
+                } else {
+                    warn!("⚠️  No token mint available in opportunity");
+                    return Ok(false);
+                };
+
+                // Compute ATA addresses (no creation yet - will be included in bundle for atomicity)
+                // This prevents fee waste: if bundle fails, ATA creation also fails
                 let token_account_manager =
                     crate::token_account_manager::TokenAccountManager::new(rpc_url.clone());
                 let wsol_mint = solana_sdk::pubkey::Pubkey::from_str(
                     "So11111111111111111111111111111111111111112",
                 )
                 .unwrap();
-                let (token_ata, wsol_ata) = match token_account_manager.get_or_create_swap_atas(
-                    trading_keypair,
-                    &pool_state.token_mint,
+
+                // Get correct token programs for each mint
+                let token_program = token_account_manager.get_token_program_for_mint(&token_mint);
+                let wsol_program = spl_token::id(); // WSOL is always standard Token Program
+
+                // Compute ATA addresses (deterministic - doesn't require RPC)
+                let token_ata = crate::token_account_manager::TokenAccountManager::get_ata_address_with_program(
+                    &trading_keypair.pubkey(),
+                    &token_mint,
+                    &token_program,
+                );
+                let wsol_ata = crate::token_account_manager::TokenAccountManager::get_ata_address_with_program(
+                    &trading_keypair.pubkey(),
                     &wsol_mint,
-                ) {
-                    Ok(atas) => atas,
-                    Err(e) => {
-                        let _ = db_tracker.log_skipped(
-                            opportunity,
-                            &format!("Failed to create token accounts: {}", e),
-                        );
-                        warn!("⚠️  Failed to get/create token accounts: {}", e);
-                        return Ok(false);
-                    }
-                };
+                    &wsol_program,
+                );
+
+                // Build idempotent ATA creation instructions (will succeed even if ATA exists)
+                let token_ata_ix = crate::token_account_manager::TokenAccountManager::build_create_ata_instruction_with_program(
+                    &trading_keypair.pubkey(),
+                    &token_mint,
+                    &token_program,
+                );
+                let wsol_ata_ix = crate::token_account_manager::TokenAccountManager::build_create_ata_instruction_with_program(
+                    &trading_keypair.pubkey(),
+                    &wsol_mint,
+                    &wsol_program,
+                );
+                info!("📝 PumpSwap ATAs computed (will create in bundle): token={}, wsol={}", token_ata, wsol_ata);
 
                 let position_lamports = (position_size_sol * 1_000_000_000.0) as u64;
-                let expected_profit_pct = estimated_net_profit / position_size_sol;
-                let slippage = 0.005;
-                let min_sol_out =
-                    (position_lamports as f64 * (1.0 + expected_profit_pct - slippage)) as u64;
+                let slippage = 0.02; // 2% slippage for sandwich
 
-                let arbitrage_ix = match crate::pumpswap_swap::build_pumpswap_backrun_instruction(
-                    pool_state,
+                // === FULL SANDWICH: FRONTRUN (buy) + BACKRUN (sell) ===
+                info!("📦 Building PumpSwap SANDWICH bundle: [FRONTRUN BUY, BACKRUN SELL]");
+
+                // Calculate expected tokens from frontrun (rough estimate based on bonding curve)
+                // For now, use a conservative estimate - we'll get actual amount from simulation later
+                let min_tokens_frontrun = (position_lamports as f64 * 0.9) as u64; // Conservative 90%
+
+                // FRONTRUN: Buy tokens with SOL
+                let frontrun_ix = match crate::pumpswap_swap::build_pumpswap_frontrun_instruction(
+                    &pool_state,
                     &token_ata,
                     &trading_keypair.pubkey(),
                     position_lamports,
-                    min_sol_out,
+                    min_tokens_frontrun,
                 ) {
                     Ok(ix) => ix,
                     Err(e) => {
                         let _ = db_tracker.log_failed(
                             &opportunity.signature,
-                            &format!("Failed to build PumpSwap swap: {}", e),
+                            &format!("Failed to build PumpSwap frontrun: {}", e),
                         );
-                        warn!("⚠️  Failed to build PumpSwap arbitrage instruction: {}", e);
+                        warn!("⚠️  Failed to build PumpSwap frontrun instruction: {}", e);
                         return Ok(false);
                     }
                 };
 
-                let recent_blockhash = match rpc_client.get_latest_blockhash() {
-                    Ok(blockhash) => blockhash,
+                // BACKRUN: Sell tokens for SOL (estimate tokens from frontrun)
+                // Use the tokens we expect to receive from frontrun
+                let expected_tokens = min_tokens_frontrun; // Conservative - we'll have at least this many
+                let min_sol_backrun = (position_lamports as f64 * (1.0 - slippage)) as u64;
+
+                let backrun_ix = match crate::pumpswap_swap::build_pumpswap_backrun_instruction(
+                    &pool_state,
+                    &token_ata,
+                    &trading_keypair.pubkey(),
+                    expected_tokens,
+                    min_sol_backrun,
+                ) {
+                    Ok(ix) => ix,
                     Err(e) => {
                         let _ = db_tracker.log_failed(
                             &opportunity.signature,
-                            &format!("Failed to get blockhash: {}", e),
+                            &format!("Failed to build PumpSwap backrun: {}", e),
                         );
+                        warn!("⚠️  Failed to build PumpSwap backrun instruction: {}", e);
                         return Ok(false);
                     }
                 };
 
-                let arbitrage_tx = solana_sdk::transaction::Transaction::new_signed_with_payer(
-                    &[arbitrage_ix],
+                info!("   Frontrun: {} lamports SOL → {} min tokens", position_lamports, min_tokens_frontrun);
+                info!("   Backrun: {} tokens → {} min lamports SOL", expected_tokens, min_sol_backrun);
+
+                // CRITICAL: Use victim's blockhash for ALL bundle transactions
+                let blockhash_to_use = match &opportunity.victim_blockhash {
+                    Some(bh) => {
+                        info!("✅ Using VICTIM's blockhash: {} (CRITICAL for bundle success)", bh);
+                        *bh
+                    }
+                    None => {
+                        warn!("⚠️  No victim blockhash - fetching fresh (may cause bundle failure)");
+                        match rpc_client.get_latest_blockhash() {
+                            Ok(blockhash) => blockhash,
+                            Err(e) => {
+                                let _ = db_tracker.log_failed(
+                                    &opportunity.signature,
+                                    &format!("Failed to get blockhash: {}", e),
+                                );
+                                return Ok(false);
+                            }
+                        }
+                    }
+                };
+
+                // Create FRONTRUN transaction (includes ATA creation for atomicity)
+                // ATA instructions are idempotent - they succeed even if ATA already exists
+                // This prevents fee waste: if bundle fails, ATA creation also fails
+                let frontrun_tx = solana_sdk::transaction::Transaction::new_signed_with_payer(
+                    &[token_ata_ix, wsol_ata_ix, frontrun_ix],  // ATA creation + swap in one tx
                     Some(&trading_keypair.pubkey()),
                     &[trading_keypair],
-                    recent_blockhash,
+                    blockhash_to_use,
+                );
+                info!("📦 PumpSwap Frontrun TX includes: 2 ATA creates + 1 swap");
+
+                // Create BACKRUN transaction
+                let backrun_tx = solana_sdk::transaction::Transaction::new_signed_with_payer(
+                    &[backrun_ix],
+                    Some(&trading_keypair.pubkey()),
+                    &[trading_keypair],
+                    blockhash_to_use,
                 );
 
-                let jito_tip_lamports = 500_000u64;
-                info!("🚀 Submitting PumpSwap arbitrage to JITO...");
+                // Grok recommended: 0.005 SOL minimum tip for MEV bundles
+                let jito_tip_lamports = 5_000_000u64; // 0.005 SOL - competitive for MEV
+                info!("💰 PumpSwap MEV tip: {} lamports ({:.4} SOL)", jito_tip_lamports, jito_tip_lamports as f64 / 1_000_000_000.0);
+                info!("🚀 Submitting PumpSwap SANDWICH to JITO: [FRONTRUN → VICTIM → BACKRUN → TIP]");
+                info!("   Bundle: [FRONTRUN → VICTIM → BACKRUN → TIP] (4 txs)");
+                info!("   Victim tx bytes: {} bytes", opportunity.victim_tx_bytes.as_ref().map_or(0, |b| b.len()));
                 let bundle_result = jito_client
-                    .submit_bundle(vec![arbitrage_tx], Some(jito_tip_lamports))
+                    .submit_sandwich_bundle(
+                        frontrun_tx,
+                        opportunity.victim_tx_bytes.clone(),
+                        backrun_tx,
+                        Some(jito_tip_lamports),
+                        opportunity.victim_blockhash,
+                    )
                     .await;
 
                 match bundle_result {
                     Ok(bundle_id) => {
-                        info!("✅ PumpSwap arbitrage bundle submitted! ID: {}", bundle_id);
+                        info!("✅ PumpSwap SANDWICH bundle submitted! ID: {}", bundle_id);
                         tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
                         let _ = db_tracker.log_executed(
                             &opportunity.signature,

@@ -5,6 +5,7 @@
 
 use solana_entry::entry::Entry;
 use solana_sdk::{
+    hash::Hash,
     message::VersionedMessage, pubkey::Pubkey, system_program, transaction::VersionedTransaction,
 };
 use std::str::FromStr;
@@ -83,6 +84,14 @@ pub struct SandwichOpportunity {
     pub pool_address: Option<String>, // DEX pool address
     pub swap_amount_in: Option<u64>,  // Amount in (lamports/smallest unit)
     pub min_amount_out: Option<u64>,  // Minimum amount out (slippage protection)
+
+    // CRITICAL: Raw victim transaction bytes for JITO bundle inclusion
+    // Without this, JITO can't guarantee ordering: [frontrun, VICTIM, backrun]
+    pub victim_tx_bytes: Option<Vec<u8>>,
+
+    // CRITICAL: Victim's blockhash - ALL bundle transactions must use this SAME blockhash
+    // Using a different blockhash for frontrun/backrun causes bundle failures
+    pub victim_blockhash: Option<Hash>,
 }
 
 /// Configuration for sandwich detection
@@ -180,11 +189,14 @@ fn parse_raydium_amm_v4_swap(
         &instruction.accounts[0..3.min(instruction.accounts.len())]
     );
 
-    // ✅ GROK VERIFIED: Raydium AMM V4 pool at account index 0 (amm state account)
-    let pool_address = accounts.get(instruction.accounts[0] as usize)?;
+    // ✅ RPC VERIFIED (2025-12-07): Raydium AMM V4 pool at account index 1
+    // Index 0 = token_program
+    // Index 1 = amm_id (pool state) ← THE ACTUAL POOL
+    // Index 2 = amm_authority
+    let pool_address = accounts.get(instruction.accounts[1] as usize)?;
 
     info!(
-        "✅ EXTRACTED POOL: {} | DEX: RaydiumAmmV4 | From ix accounts[0]",
+        "✅ EXTRACTED POOL: {} | DEX: RaydiumAmmV4 | From ix accounts[1] (RPC VERIFIED)",
         pool_address
     );
 
@@ -312,13 +324,14 @@ fn parse_raydium_clmm_swap(
         &instruction.accounts[0..3.min(instruction.accounts.len())]
     );
 
-    // ✅ GROK FIX: Pool at index 1 (pool_state), index 0 is amm_config (264 bytes)
-    // Index 0 = amm_config PDA (~264 bytes)
-    // Index 1 = pool_state PDA (~1,088 bytes) ← THE ACTUAL POOL
-    let pool_address = accounts.get(instruction.accounts[1] as usize)?;
+    // ✅ RPC VERIFIED (2025-12-07): Pool at index 2 (pool_state), NOT index 0 or 1
+    // Index 0 = amm_config PDA (~117 bytes)
+    // Index 1 = pool_state header (~117 bytes)
+    // Index 2 = pool_state PDA (~1,544 bytes) ← THE ACTUAL POOL
+    let pool_address = accounts.get(instruction.accounts[2] as usize)?;
 
     info!(
-        "✅ EXTRACTED POOL: {} | DEX: Raydium_CLMM | From ix accounts[1] (FIX)",
+        "✅ EXTRACTED POOL: {} | DEX: Raydium_CLMM | From ix accounts[2] (RPC VERIFIED)",
         pool_address
     );
 
@@ -701,23 +714,47 @@ fn parse_pumpfun_bonding_curve_swap(
         return None;
     }
 
-    info!(
-        "🔍 PumpFun Parse | is_buy={} | is_sell={} | ix.accounts.len()={} | accounts.len()={}",
-        is_buy,
-        is_sell,
-        instruction.accounts.len(),
-        accounts.len()
-    );
+    // ✅ RPC VERIFIED (2025-12-07): Bonding curve at index 0 (740 bytes), NOT index 3
+    // Index 0 = bonding_curve PDA (~740 bytes) ← THE ACTUAL POOL
+    // Index 3 = smaller config (~151 bytes)
 
-    let bonding_curve = accounts.get(instruction.accounts[3] as usize)?;
+    // Extract pool address with explicit error logging (no silent ? failures)
+    let pool_idx = instruction.accounts[0] as usize;
+    let bonding_curve = match accounts.get(pool_idx) {
+        Some(addr) => addr,
+        None => {
+            warn!(
+                "⚠️  PumpFun Parse REJECTED: pool_idx={} out of bounds (accounts.len={})",
+                pool_idx, accounts.len()
+            );
+            return None;
+        }
+    };
 
-    info!(
-        "✅ EXTRACTED POOL: {} | DEX: PumpFun_BondingCurve | From ix accounts[3] (bonding curve)",
-        bonding_curve
-    );
+    // Extract user accounts with explicit error logging
+    let user_source_idx = instruction.accounts[5] as usize;
+    let user_source = match accounts.get(user_source_idx) {
+        Some(addr) => addr,
+        None => {
+            warn!(
+                "⚠️  PumpFun Parse REJECTED: user_source_idx={} out of bounds (accounts.len={})",
+                user_source_idx, accounts.len()
+            );
+            return None;
+        }
+    };
 
-    let user_source = accounts.get(instruction.accounts[5] as usize)?; // associated_user
-    let user_dest = accounts.get(instruction.accounts[4] as usize)?; // associated_bonding_curve
+    let user_dest_idx = instruction.accounts[4] as usize;
+    let user_dest = match accounts.get(user_dest_idx) {
+        Some(addr) => addr,
+        None => {
+            warn!(
+                "⚠️  PumpFun Parse REJECTED: user_dest_idx={} out of bounds (accounts.len={})",
+                user_dest_idx, accounts.len()
+            );
+            return None;
+        }
+    };
 
     // PumpFun uses simpler 8-byte discriminator
     let amount_in = u64::from_le_bytes([
@@ -741,6 +778,12 @@ fn parse_pumpfun_bonding_curve_swap(
         instruction.data[22],
         instruction.data[23],
     ]);
+
+    // ✅ SUCCESS LOG - Only log after ALL validations pass
+    info!(
+        "✅ PumpFun Parse SUCCESS: pool={} | amount={} | min_out={}",
+        bonding_curve, amount_in, min_amount_out
+    );
 
     Some((
         bonding_curve.to_string(),
@@ -818,18 +861,24 @@ fn parse_pumpswap_dex_swap(
         }
     }
 
-    // ✅ GROK FIX: PumpSwap DEX pool at index 3 (NOT index 0!)
-    // Account structure per Grok (session 20251110_060509):
-    // Index 0 = Global config PDA (117 bytes) - DEX-wide parameters
-    // Index 3 = Pool PDA (264 bytes) - THE ACTUAL POOL
-    let pool_address = accounts.get(instruction.accounts[3] as usize)?;
+    // ✅ RPC VERIFIED (2025-12-07): Pool at index 2 (642 bytes), NOT index 0 or 3
+    // Index 0 = Global config PDA (~244 bytes) - DEX-wide parameters
+    // Index 2 = Pool PDA (~642 bytes) ← THE ACTUAL POOL
 
-    info!(
-        "✅ EXTRACTED POOL: {} | DEX: PumpSwap_DEX | From ix accounts[3] (FIX)",
-        pool_address
-    );
+    // Extract pool address with explicit error logging (no silent ? failures)
+    let pool_idx = instruction.accounts[2] as usize;
+    let pool_address = match accounts.get(pool_idx) {
+        Some(addr) => addr,
+        None => {
+            warn!(
+                "⚠️  PumpSwap DEX Parse REJECTED: pool_idx={} out of bounds (accounts.len={})",
+                pool_idx, accounts.len()
+            );
+            return None;
+        }
+    };
 
-    // Try to get user accounts if available
+    // Try to get user accounts with fallback
     let user_source = accounts
         .get(instruction.accounts.get(4).copied().unwrap_or(0) as usize)
         .unwrap_or(pool_address); // Fallback to pool if not enough accounts
@@ -866,8 +915,9 @@ fn parse_pumpswap_dex_swap(
         (100_000_000, 0) // 0.1 SOL estimate
     };
 
-    debug!(
-        "✅ PumpSwap DEX PARSED | Pool: {} | Amount: {} | Min out: {}",
+    // ✅ SUCCESS LOG - Only log after ALL validations pass
+    info!(
+        "✅ PumpSwap DEX Parse SUCCESS: pool={} | amount={} | min_out={}",
         pool_address, amount_in, min_amount_out
     );
 
@@ -974,8 +1024,37 @@ fn analyze_transaction(
                             instruction.accounts.len()
                         );
                         debug!("   Full instruction: {:?}", instruction);
+
+                        // For PumpFun BondingCurve and PumpSwap DEX, we REQUIRE parsed pool info
+                        // because they have unique instruction formats that can't be executed
+                        // without pool address. Skip creating opportunities without pool info.
+                        if dex_name == "PumpFun_BondingCurve" || dex_name == "PumpSwap_DEX" {
+                            warn!("   Skipping {} opportunity - pool info required", dex_name);
+                            continue;
+                        }
+
                         (None, None, None, None, None)
                     };
+
+                    // CRITICAL: Serialize victim transaction for JITO bundle inclusion
+                    // Without this, JITO can't guarantee sandwich ordering: [frontrun, VICTIM, backrun]
+                    let victim_tx_bytes = bincode::serialize(tx).ok();
+                    if victim_tx_bytes.is_none() {
+                        warn!("⚠️  Failed to serialize victim tx for {}", dex_name);
+                    } else {
+                        info!("✅ Captured victim tx bytes ({} bytes) for JITO bundle",
+                              victim_tx_bytes.as_ref().map_or(0, |b| b.len()));
+                    }
+
+                    // CRITICAL: Extract victim's blockhash - ALL bundle TXs must use this SAME blockhash
+                    // Using a different blockhash for frontrun/backrun is the #1 cause of bundle failures
+                    let victim_blockhash = match &tx.message {
+                        VersionedMessage::Legacy(msg) => Some(msg.recent_blockhash),
+                        VersionedMessage::V0(msg) => Some(msg.recent_blockhash),
+                    };
+                    if let Some(ref bh) = victim_blockhash {
+                        info!("✅ Captured victim blockhash: {} (CRITICAL for bundle success)", bh);
+                    }
 
                     return Some(SandwichOpportunity {
                         dex_name: dex_name.to_string(),
@@ -990,6 +1069,12 @@ fn analyze_transaction(
                         pool_address: pool_addr,
                         swap_amount_in: amount_in,
                         min_amount_out: min_out,
+
+                        // Raw victim transaction for JITO bundle
+                        victim_tx_bytes,
+
+                        // Victim's blockhash - frontrun/backrun MUST use this
+                        victim_blockhash,
                     });
                 }
             }

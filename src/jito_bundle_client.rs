@@ -3,7 +3,9 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use solana_rpc_client::rpc_client::RpcClient;
 use solana_sdk::{
-    compute_budget::ComputeBudgetInstruction, pubkey::Pubkey, signature::Signer,
+    commitment_config::CommitmentConfig,
+    compute_budget::ComputeBudgetInstruction, pubkey::Pubkey,
+    signature::{Signature, Signer},
     system_instruction, transaction::Transaction,
 };
 use std::sync::Arc;
@@ -353,81 +355,320 @@ impl JitoBundleClient {
         Ok(bundle_id)
     }
 
-    /// Submit bundle ONCE with NO RETRIES (MEV philosophy: only fresh detections)
-    /// If submission fails, we move on to the next opportunity - no time wasted on retries
+    /// Submit a REAL sandwich bundle with victim transaction included
+    ///
+    /// CRITICAL: This is the correct sandwich format: [frontrun, VICTIM, backrun, tip]
+    /// Without the victim transaction, JITO can't guarantee ordering and bundles won't land.
+    ///
+    /// Arguments:
+    /// - frontrun_tx: Our buy transaction (before victim)
+    /// - victim_tx_bytes: Raw serialized victim transaction (VersionedTransaction from ShredStream)
+    /// - backrun_tx: Our sell transaction (after victim)
+    /// - tip_lamports: Optional tip amount (uses dynamic calculation if None)
+    /// - victim_blockhash: CRITICAL - victim's blockhash that ALL bundle TXs must use
+    pub async fn submit_sandwich_bundle(
+        &self,
+        frontrun_tx: Transaction,
+        victim_tx_bytes: Option<Vec<u8>>,
+        backrun_tx: Transaction,
+        tip_lamports: Option<u64>,
+        victim_blockhash: Option<solana_sdk::hash::Hash>,
+    ) -> Result<String> {
+        let start_time = Instant::now();
+
+        // Calculate optimal tip if not provided - GROK RECOMMENDED: 0.005 SOL minimum for MEV
+        let tip_amount = match tip_lamports {
+            Some(tip) => tip.max(5_000_000), // Minimum 0.005 SOL per Grok's recommendation
+            None => {
+                let calculated = self.calculate_optimal_tip().await;
+                calculated.max(5_000_000) // Minimum 0.005 SOL for MEV bundles
+            }
+        };
+
+        // Select random tip account for load balancing
+        let tip_account = self.tip_accounts[fastrand::usize(..self.tip_accounts.len())];
+
+        // CRITICAL: Use victim's blockhash for tip transaction
+        // ALL transactions in bundle MUST use the SAME blockhash (the victim's)
+        // This is the #1 cause of bundle failures - blockhash mismatch
+        let blockhash_to_use = match victim_blockhash {
+            Some(bh) => {
+                info!("✅ Using VICTIM's blockhash for tip tx: {} (CRITICAL for bundle success)", bh);
+                bh
+            }
+            None => {
+                // Fallback to frontrun's blockhash if victim's not provided
+                // (caller should have used victim's blockhash when building frontrun)
+                warn!("⚠️  No victim blockhash provided - using frontrun's blockhash (may cause bundle failure)");
+                frontrun_tx.message.recent_blockhash
+            }
+        };
+
+        // Create tip transaction with victim's blockhash
+        let tip_tx = self.create_tip_transaction(tip_amount, tip_account, blockhash_to_use)?;
+
+        // Build the CORRECT sandwich bundle: [frontrun, VICTIM, backrun, tip]
+        let mut encoded_transactions: Vec<String> = Vec::with_capacity(4);
+
+        // 1. Frontrun (our buy)
+        let frontrun_serialized = bincode::serialize(&frontrun_tx)
+            .map_err(|e| anyhow::anyhow!("Frontrun serialization error: {}", e))?;
+        encoded_transactions.push(bs58::encode(frontrun_serialized).into_string());
+
+        // 2. VICTIM transaction - include directly (0slot strategy: no pending check)
+        // ⚡ 0SLOT OPTIMIZATION: Skip pending check (saves 15-20ms)
+        // ShredStream gives us CURRENT slot data - victim is in-flight, include directly!
+        if let Some(ref victim_bytes) = victim_tx_bytes {
+            encoded_transactions.push(bs58::encode(victim_bytes).into_string());
+            info!("🥪 0SLOT: VICTIM tx added directly (no pending check - saves 15ms)");
+        } else {
+            return Err(anyhow::anyhow!("No victim transaction provided"));
+        }
+
+        // 3. Backrun (our sell)
+        let backrun_serialized = bincode::serialize(&backrun_tx)
+            .map_err(|e| anyhow::anyhow!("Backrun serialization error: {}", e))?;
+        encoded_transactions.push(bs58::encode(backrun_serialized).into_string());
+
+        // 4. Tip transaction
+        let tip_serialized = bincode::serialize(&tip_tx)
+            .map_err(|e| anyhow::anyhow!("Tip tx serialization error: {}", e))?;
+        encoded_transactions.push(bs58::encode(tip_serialized).into_string());
+
+        // Create bundle
+        let bundle = JitoBundle {
+            uuid: Uuid::new_v4().to_string(),
+            transactions: encoded_transactions.clone(),
+            tip_amount,
+            tip_account,
+        };
+
+        info!(
+            "🥪 Submitting FULL SANDWICH bundle: {} txs [frontrun→VICTIM→backrun→tip], {} lamports tip",
+            bundle.transactions.len(),
+            tip_amount
+        );
+
+        // Submit with retries
+        let bundle_id = self.submit_with_retries(&bundle).await?;
+
+        // Update metrics
+        {
+            let mut metrics = self.metrics.lock().await;
+            metrics.bundles_submitted += 1;
+            metrics.tip_amounts_paid.push(tip_amount);
+        }
+
+        let submission_time = start_time.elapsed().as_millis();
+        info!("✅ Sandwich bundle submitted in {}ms: {}", submission_time, bundle_id);
+
+        Ok(bundle_id)
+    }
+
+    /// Submit bundle with NY-ONLY submission for 0SLOT optimization
+    /// ⚡ 0SLOT: NY endpoint only - no fallbacks to EU (adds 100ms+ latency)
+    /// Our VPS is US-based, so NY is our fastest path to JITO block engine
     async fn submit_with_retries(&self, bundle: &JitoBundle) -> Result<String> {
-        // ⚡ RATE LIMITING: Enforce 1.1 second minimum between submissions
-        // JITO limit is 1 bundle/sec, we use 1.1s for safety margin
-        let rate_limit_duration = Duration::from_millis(1100);
+        // ⚡ RATE LIMITING: Enforce 1-second cooldown between submissions
+        // JITO rate limits to ~1 bundle/second per account - submitting faster just wastes all attempts
+        const RATE_LIMIT_COOLDOWN_MS: u64 = 1000; // 1 second
 
         {
-            let mut last_time = self.last_submission_time.lock().await;
-            if let Some(last_instant) = *last_time {
-                let elapsed = last_instant.elapsed();
-                if elapsed < rate_limit_duration {
-                    let sleep_duration = rate_limit_duration - elapsed;
-                    debug!(
-                        "⏱️  Rate limiting: sleeping {:?} to maintain 1 bundle/1.1s",
-                        sleep_duration
-                    );
-                    drop(last_time); // Release lock before sleeping
-                    tokio::time::sleep(sleep_duration).await;
-                    // Re-acquire lock to update
-                    let mut last_time = self.last_submission_time.lock().await;
-                    *last_time = Some(Instant::now());
-                } else {
-                    *last_time = Some(Instant::now());
+            let last_time = self.last_submission_time.lock().await;
+            if let Some(last) = *last_time {
+                let elapsed = last.elapsed().as_millis() as u64;
+                if elapsed < RATE_LIMIT_COOLDOWN_MS {
+                    let remaining = RATE_LIMIT_COOLDOWN_MS - elapsed;
+                    debug!("⚡ RATE LIMITED: Skipping bundle - {}ms since last submission, need {}ms cooldown",
+                           elapsed, remaining);
+                    return Err(anyhow::anyhow!("Rate limited: {}ms since last submission", elapsed));
                 }
-            } else {
-                *last_time = Some(Instant::now());
             }
         }
 
-        // Submit once with NO RETRIES - MEV opportunities are time-sensitive
-        // If it fails, we skip it and move on to the next fresh detection
-        self.submit_bundle_once(bundle).await
+        // ⚡ 0SLOT: NY-ONLY endpoint - maximum speed, no EU fallback latency
+        // EU endpoints add 100-200ms which kills 0slot opportunity
+        let endpoints: [(String, Duration); 1] = [
+            ("https://ny.mainnet.block-engine.jito.wtf".to_string(), Duration::from_millis(150)),  // NY only, 150ms timeout
+        ];
+
+        // Update timestamp AFTER rate limit check passes
+        {
+            let mut last_time = self.last_submission_time.lock().await;
+            *last_time = Some(Instant::now());
+        }
+
+        let mut backoff = Duration::from_millis(100);
+        let max_backoff = Duration::from_secs(2);
+
+        // Try each endpoint sequentially with exponential backoff on 429
+        for (endpoint, timeout_duration) in endpoints.iter() {
+            let start = Instant::now();
+
+            let request = BundleSubmissionRequest {
+                jsonrpc: "2.0".to_string(),
+                id: format!("bundle_{}", fastrand::u64(..)),
+                method: "sendBundle".to_string(),
+                params: vec![bundle.transactions.clone()],
+            };
+
+            let response = timeout(
+                *timeout_duration,
+                self.client
+                    .post(format!("{}/api/v1/bundles", endpoint))
+                    .header("Content-Type", "application/json")
+                    .json(&request)
+                    .send(),
+            )
+            .await;
+
+            let response = match response {
+                Ok(Ok(r)) => r,
+                Ok(Err(e)) => {
+                    debug!("⚡ {} HTTP error in {}ms: {}", Self::short_endpoint(endpoint), start.elapsed().as_millis(), e);
+                    continue; // Try next endpoint
+                }
+                Err(_) => {
+                    debug!("⚡ {} Timeout after {:?}", Self::short_endpoint(endpoint), timeout_duration);
+                    continue; // Try next endpoint
+                }
+            };
+
+            if response.status().as_u16() == 429 {
+                warn!("⚡ {} Rate limited (429) in {}ms - backoff {:?}",
+                      Self::short_endpoint(endpoint), start.elapsed().as_millis(), backoff);
+
+                // Exponential backoff before trying next endpoint
+                if backoff < max_backoff {
+                    tokio::time::sleep(backoff).await;
+                    backoff *= 2;
+                }
+                continue; // Try next endpoint
+            }
+
+            if !response.status().is_success() {
+                let status = response.status();
+                // ⚡ DIAGNOSTIC: Log the error body for 400 errors to understand rejections
+                if status.as_u16() == 400 {
+                    if let Ok(body) = response.text().await {
+                        warn!("⚡ {} HTTP 400 - BODY: {}", Self::short_endpoint(endpoint), body);
+                    } else {
+                        warn!("⚡ {} HTTP 400 (no body)", Self::short_endpoint(endpoint));
+                    }
+                } else {
+                    warn!("⚡ {} HTTP {} in {}ms", Self::short_endpoint(endpoint), status, start.elapsed().as_millis());
+                }
+                continue; // Try next endpoint
+            }
+
+            // Success! Parse response
+            match response.json::<BundleSubmissionResponse>().await {
+                Ok(bundle_response) => {
+                    if let Some(error) = bundle_response.error {
+                        warn!("⚡ {} JITO error {}: {}", Self::short_endpoint(endpoint), error.code, error.message);
+                        continue;
+                    }
+
+                    if let Some(bundle_id) = bundle_response.result {
+                        info!("⚡ {} SUCCESS in {}ms: {}",
+                              Self::short_endpoint(endpoint), start.elapsed().as_millis(),
+                              &bundle_id[..bundle_id.len().min(16)]);
+                        return Ok(bundle_id);
+                    }
+                }
+                Err(e) => {
+                    warn!("⚡ {} Parse error: {}", Self::short_endpoint(endpoint), e);
+                    continue;
+                }
+            }
+        }
+
+        // All endpoints failed
+        warn!("⚡ SPEED: All 4 endpoints failed");
+        Err(anyhow::anyhow!("All endpoints failed"))
     }
 
-    /// Single bundle submission attempt
+    /// Helper: Get short endpoint name for logging
+    fn short_endpoint(endpoint: &str) -> &str {
+        if endpoint.contains("ny.") { "NY" }
+        else if endpoint.contains("amsterdam") { "AMS" }
+        else if endpoint.contains("frankfurt") { "FRA" }
+        else if endpoint.contains("tokyo") { "TKY" }
+        else { "PRI" }
+    }
+
+    /// Single bundle submission attempt (deprecated - use submit_bundle_to_endpoint)
     async fn submit_bundle_once(&self, bundle: &JitoBundle) -> Result<String> {
+        self.submit_bundle_to_endpoint(bundle, &self.block_engine_url).await
+    }
+
+    /// ⚡ GROK OPTIMIZATION: Fast bundle submission to specific endpoint
+    /// Timeout reduced from 30s to 200ms for MEV speed requirements
+    async fn submit_bundle_to_endpoint(&self, bundle: &JitoBundle, endpoint: &str) -> Result<String> {
+        let start = Instant::now();
+
         let request = BundleSubmissionRequest {
             jsonrpc: "2.0".to_string(),
-            id: format!("bundle_{}", fastrand::u64(..)), // FIXED: String ID per JITO API
+            id: format!("bundle_{}", fastrand::u64(..)),
             method: "sendBundle".to_string(),
-            params: vec![bundle.transactions.clone()], // FIXED: Wrapped in array per JITO API
+            params: vec![bundle.transactions.clone()],
         };
 
+        // ⚡ GROK OPTIMIZATION: 200ms timeout (was 30s) - if it takes longer, opportunity is gone
         let response = timeout(
-            Duration::from_secs(30),
+            Duration::from_millis(200),
             self.client
-                .post(format!("{}/api/v1/bundles", self.block_engine_url))
+                .post(format!("{}/api/v1/bundles", endpoint))
                 .header("Content-Type", "application/json")
                 .json(&request)
                 .send(),
         )
-        .await??;
+        .await;
+
+        let response = match response {
+            Ok(Ok(r)) => r,
+            Ok(Err(e)) => {
+                warn!("⚡ SPEED: HTTP error in {}ms: {}", start.elapsed().as_millis(), e);
+                return Err(anyhow::anyhow!("HTTP error: {}", e));
+            }
+            Err(_) => {
+                warn!("⚡ SPEED: Timeout after 200ms (endpoint: {})", endpoint);
+                return Err(anyhow::anyhow!("Timeout after 200ms"));
+            }
+        };
 
         if !response.status().is_success() {
-            return Err(anyhow::anyhow!(
-                "HTTP error {}: {}",
-                response.status(),
-                response.text().await?
-            ));
+            let status = response.status();
+            // ⚡ Don't waste time on detailed error parsing for 429s
+            if status.as_u16() == 429 {
+                warn!("⚡ SPEED: Rate limited (429) on {} - trying next opportunity", endpoint);
+            } else if status.as_u16() == 400 {
+                // ⚡ DIAGNOSTIC: Log the error body for 400 errors to understand rejections
+                if let Ok(body) = response.text().await {
+                    warn!("⚡ HTTP 400 on {}: {}", Self::short_endpoint(endpoint), body);
+                }
+            }
+            return Err(anyhow::anyhow!("HTTP {} in {}ms", status, start.elapsed().as_millis()));
         }
 
         let bundle_response: BundleSubmissionResponse = response.json().await?;
 
         if let Some(error) = bundle_response.error {
             return Err(anyhow::anyhow!(
-                "Jito error {}: {}",
+                "Jito error {} in {}ms: {}",
                 error.code,
+                start.elapsed().as_millis(),
                 error.message
             ));
         }
 
-        bundle_response
+        let bundle_id = bundle_response
             .result
-            .ok_or_else(|| anyhow::anyhow!("No bundle ID returned"))
+            .ok_or_else(|| anyhow::anyhow!("No bundle ID returned"))?;
+
+        info!("⚡ SPEED: Bundle submitted in {}ms: {}", start.elapsed().as_millis(), &bundle_id[..16]);
+
+        Ok(bundle_id)
     }
 
     /// Create tip transaction to Jito validators
@@ -886,6 +1127,90 @@ impl JitoBundleClient {
         }
 
         Ok(())
+    }
+
+    /// ⚡ GROK FIX: Check if victim transaction is still pending via getSignatureStatuses
+    ///
+    /// Returns true if victim is still pending (can be included in bundle)
+    /// Returns false if already processed (use bracket strategy instead)
+    ///
+    /// This is a FAST check (~5-15ms) that determines whether we can do a real sandwich
+    /// or need to fall back to bracket strategy.
+    pub async fn victim_still_pending(&self, victim_signature: &Signature) -> bool {
+        if let Some(ref rpc) = self.rpc_client {
+            let start = Instant::now();
+
+            // Use confirmed commitment for fastest reliable check
+            match rpc.get_signature_statuses(&[*victim_signature]) {
+                Ok(response) => {
+                    let elapsed = start.elapsed().as_millis();
+
+                    match &response.value[0] {
+                        Some(status) => {
+                            // If confirmation_status exists, tx is already being processed
+                            // ProcessedWithMeta or higher = already processed
+                            if status.confirmations.is_some() {
+                                info!("⚡ Victim tx CONFIRMED ({}ms) - using bracket strategy", elapsed);
+                                false // Already processed, use bracket
+                            } else {
+                                // Slot exists but no confirmations = still being processed
+                                info!("⚡ Victim tx IN-FLIGHT ({}ms) - using bracket strategy", elapsed);
+                                false // In-flight means it's being scheduled now
+                            }
+                        }
+                        None => {
+                            // Not found = still truly pending!
+                            info!("⚡ Victim tx PENDING ({}ms) - including in FULL SANDWICH!", elapsed);
+                            true // PENDING - can include in bundle!
+                        }
+                    }
+                }
+                Err(e) => {
+                    // RPC error - default to bracket for safety
+                    warn!("⚡ Pending check RPC error (default to bracket): {}", e);
+                    false
+                }
+            }
+        } else {
+            // No RPC client - can't check, default to bracket
+            warn!("⚡ No RPC client for pending check - using bracket strategy");
+            false
+        }
+    }
+
+    /// Extract victim signature from raw transaction bytes
+    ///
+    /// Solana transaction format:
+    /// - First 1-2 bytes: number of signatures (compact-u16)
+    /// - Next 64 bytes per signature: the actual signatures
+    ///
+    /// For a typical victim tx, there's 1 signature at bytes 1-64 (0-indexed)
+    pub fn extract_victim_signature(victim_tx_bytes: &[u8]) -> Option<Signature> {
+        // Minimum size: 1 (sig count) + 64 (signature) = 65 bytes
+        if victim_tx_bytes.len() < 65 {
+            warn!("⚡ Victim tx too small to extract signature ({} bytes)", victim_tx_bytes.len());
+            return None;
+        }
+
+        // First byte is signature count (usually 1 for single-signer tx)
+        let sig_count = victim_tx_bytes[0] as usize;
+        if sig_count == 0 || sig_count > 8 {
+            warn!("⚡ Invalid signature count: {}", sig_count);
+            return None;
+        }
+
+        // Extract first signature (bytes 1-64)
+        let sig_bytes: [u8; 64] = match victim_tx_bytes[1..65].try_into() {
+            Ok(arr) => arr,
+            Err(_) => {
+                warn!("⚡ Failed to extract signature bytes");
+                return None;
+            }
+        };
+
+        let signature = Signature::from(sig_bytes);
+        debug!("⚡ Extracted victim signature: {}", signature);
+        Some(signature)
     }
 }
 

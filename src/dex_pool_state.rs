@@ -25,7 +25,8 @@ pub enum DexType {
     RaydiumCpmm,
     OrcaWhirlpools,
     MeteoraDlmm,
-    PumpSwap,
+    PumpFunBondingCurve,  // Original pump.fun bonding curve: 6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P
+    PumpSwapDex,           // PumpSwap AMM DEX: pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA
     JupiterV6, // Special handling needed
 }
 
@@ -48,8 +49,13 @@ impl DexType {
             DexType::MeteoraDlmm => {
                 Pubkey::from_str("LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo").unwrap()
             }
-            DexType::PumpSwap => {
+            DexType::PumpFunBondingCurve => {
+                // Original pump.fun bonding curve program
                 Pubkey::from_str("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P").unwrap()
+            }
+            DexType::PumpSwapDex => {
+                // PumpSwap AMM DEX (pAMMBay...)
+                Pubkey::from_str("pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA").unwrap()
             }
             DexType::JupiterV6 => {
                 Pubkey::from_str("JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4").unwrap()
@@ -66,7 +72,8 @@ impl DexType {
             "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C" => Some(DexType::RaydiumCpmm),
             "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc" => Some(DexType::OrcaWhirlpools),
             "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo" => Some(DexType::MeteoraDlmm),
-            "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P" => Some(DexType::PumpSwap),
+            "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P" => Some(DexType::PumpFunBondingCurve),
+            "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA" => Some(DexType::PumpSwapDex),
             "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4" => Some(DexType::JupiterV6),
             _ => None,
         }
@@ -76,11 +83,12 @@ impl DexType {
     pub fn from_name(name: &str) -> Option<Self> {
         match name {
             "Raydium_AMM_V4" => Some(DexType::RaydiumAmmV4),
-            "Raydium_CLMM" => Some(DexType::RaydiumClmm),
+            "Raydium_CLMM" | "RaydiumClmm" => Some(DexType::RaydiumClmm),
             "Raydium_CPMM" => Some(DexType::RaydiumCpmm),
             "Orca_Whirlpools" => Some(DexType::OrcaWhirlpools),
             "Meteora_DLMM" => Some(DexType::MeteoraDlmm),
-            "PumpSwap" => Some(DexType::PumpSwap),
+            "PumpFun_BondingCurve" | "PumpSwap" => Some(DexType::PumpFunBondingCurve), // Legacy "PumpSwap" name maps to bonding curve
+            "PumpSwap_DEX" | "PumpSwapDex" => Some(DexType::PumpSwapDex),
             "Jupiter_V6" => Some(DexType::JupiterV6),
             _ => None,
         }
@@ -95,7 +103,8 @@ pub enum DexPoolState {
     RaydiumCpmm(RaydiumCpmmPoolState),
     OrcaWhirlpools(OrcaWhirlpoolState),
     MeteoraDlmm(MeteoraDlmmPoolState),
-    PumpSwap(PumpSwapBondingCurveState),
+    PumpFunBondingCurve(PumpSwapBondingCurveState),  // Original pump.fun
+    PumpSwapDex(PumpSwapBondingCurveState),           // PumpSwap AMM DEX - uses similar state structure
 }
 
 impl DexPoolState {
@@ -107,7 +116,8 @@ impl DexPoolState {
             DexPoolState::RaydiumCpmm(_) => DexType::RaydiumCpmm,
             DexPoolState::OrcaWhirlpools(_) => DexType::OrcaWhirlpools,
             DexPoolState::MeteoraDlmm(_) => DexType::MeteoraDlmm,
-            DexPoolState::PumpSwap(_) => DexType::PumpSwap,
+            DexPoolState::PumpFunBondingCurve(_) => DexType::PumpFunBondingCurve,
+            DexPoolState::PumpSwapDex(_) => DexType::PumpSwapDex,
         }
     }
 }
@@ -185,10 +195,16 @@ pub async fn fetch_pool_state(rpc: &RpcClient, pool_addr: &Pubkey) -> Result<Dex
                 .map_err(|e| anyhow!("Failed to parse Meteora DLMM state: {}", e))?;
             Ok(DexPoolState::MeteoraDlmm(state))
         }
-        DexType::PumpSwap => {
+        DexType::PumpFunBondingCurve => {
             let state = PumpSwapBondingCurveState::parse(pool_addr, &account.data)
-                .map_err(|e| anyhow!("Failed to parse PumpSwap state: {}", e))?;
-            Ok(DexPoolState::PumpSwap(state))
+                .map_err(|e| anyhow!("Failed to parse PumpFun bonding curve state: {}", e))?;
+            Ok(DexPoolState::PumpFunBondingCurve(state))
+        }
+        DexType::PumpSwapDex => {
+            // PumpSwap DEX uses a similar bonding curve structure (642 bytes)
+            let state = PumpSwapBondingCurveState::parse(pool_addr, &account.data)
+                .map_err(|e| anyhow!("Failed to parse PumpSwap DEX state: {}", e))?;
+            Ok(DexPoolState::PumpSwapDex(state))
         }
         DexType::JupiterV6 => {
             // Jupiter is an aggregator, not a direct DEX
@@ -260,9 +276,13 @@ pub async fn fetch_pool_state_by_dex(
             let state = MeteoraDlmmPoolState::parse(pool_addr, &account.data)?;
             Ok(DexPoolState::MeteoraDlmm(state))
         }
-        DexType::PumpSwap => {
+        DexType::PumpFunBondingCurve => {
             let state = PumpSwapBondingCurveState::parse(pool_addr, &account.data)?;
-            Ok(DexPoolState::PumpSwap(state))
+            Ok(DexPoolState::PumpFunBondingCurve(state))
+        }
+        DexType::PumpSwapDex => {
+            let state = PumpSwapBondingCurveState::parse(pool_addr, &account.data)?;
+            Ok(DexPoolState::PumpSwapDex(state))
         }
         DexType::JupiterV6 => Err(anyhow!("Jupiter V6: Use underlying DEX pool")),
     }

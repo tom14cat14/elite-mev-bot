@@ -18,6 +18,79 @@ pub const RAYDIUM_CLMM_PROGRAM_ID: &str = "CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7gr
 pub const SWAP_INSTRUCTION_DISCRIMINATOR: [u8; 8] =
     [0xf8, 0xc6, 0x9e, 0x91, 0xe1, 0x75, 0x87, 0xc8];
 
+/// Number of ticks per tick array (Raydium CLMM constant)
+pub const TICK_ARRAY_SIZE: i32 = 60;
+
+/// Calculate the tick array start index for a given tick
+pub fn get_tick_array_start_index(tick: i32, tick_spacing: u16) -> i32 {
+    let ticks_in_array = TICK_ARRAY_SIZE * (tick_spacing as i32);
+    let start = (tick / ticks_in_array) * ticks_in_array;
+    // Handle negative ticks
+    if tick < 0 && tick % ticks_in_array != 0 {
+        start - ticks_in_array
+    } else {
+        start
+    }
+}
+
+/// Derive the tick array PDA for a given pool and start index
+/// NOTE: Raydium CLMM uses BIG-ENDIAN for start_index (confirmed by on-chain verification)
+pub fn derive_tick_array_pda(pool_id: &Pubkey, start_index: i32, program_id: &Pubkey) -> Pubkey {
+    let seeds = &[
+        b"tick_array",
+        pool_id.as_ref(),
+        &start_index.to_be_bytes(),  // Big-endian (verified 2025-12-07)
+    ];
+    let (pda, _bump) = Pubkey::find_program_address(seeds, program_id);
+    pda
+}
+
+/// Verify that a tick_array account exists and is owned by Raydium CLMM
+/// Returns Ok(tick_array_pubkey) if valid, Err if not initialized
+pub fn verify_tick_array_exists(
+    rpc_client: &solana_client::rpc_client::RpcClient,
+    pool_id: &Pubkey,
+    tick: i32,
+    tick_spacing: u16,
+) -> Result<Pubkey> {
+    let program_id = Pubkey::from_str(RAYDIUM_CLMM_PROGRAM_ID)
+        .map_err(|e| anyhow!("Invalid Raydium CLMM program ID: {}", e))?;
+
+    let start_index = get_tick_array_start_index(tick, tick_spacing);
+    let tick_array_pda = derive_tick_array_pda(pool_id, start_index, &program_id);
+
+    // Debug: show the start_index calculation details
+    let ticks_in_array = TICK_ARRAY_SIZE * (tick_spacing as i32);
+    tracing::info!(
+        "🔢 tick_array derivation: tick={}, tick_spacing={}, ticks_in_array={}, start_index={}, PDA={}",
+        tick, tick_spacing, ticks_in_array, start_index, tick_array_pda
+    );
+
+    // Check if account exists and is owned by CLMM program
+    match rpc_client.get_account(&tick_array_pda) {
+        Ok(account) => {
+            if account.owner == program_id {
+                tracing::info!(
+                    "✅ tick_array verified: {} (start_index={}, account_data_len={})",
+                    tick_array_pda, start_index, account.data.len()
+                );
+                Ok(tick_array_pda)
+            } else {
+                Err(anyhow!(
+                    "tick_array {} exists but owned by {} (expected {})",
+                    tick_array_pda, account.owner, program_id
+                ))
+            }
+        }
+        Err(e) => {
+            Err(anyhow!(
+                "tick_array {} not initialized (start_index={}, tick={}, tick_spacing={}): {}",
+                tick_array_pda, start_index, tick, tick_spacing, e
+            ))
+        }
+    }
+}
+
 /// Build a Raydium CLMM swap instruction
 ///
 /// # Arguments
@@ -55,34 +128,60 @@ pub fn build_raydium_clmm_swap_instruction(
     instruction_data.extend_from_slice(&sqrt_price_limit.to_le_bytes());
     instruction_data.push(is_base_input as u8);
 
-    // Raydium CLMM swap requires these accounts in specific order:
-    // 0: pool_state (the CLMM pool)
-    // 1: token_program (SPL Token program)
-    // 2: user_source_token_account (user's input token account)
-    // 3: user_destination_token_account (user's output token account)
-    // 4: pool_vault_a (pool's vault for token A)
-    // 5: pool_vault_b (pool's vault for token B)
-    // 6: observation_state (price oracle account)
-    // 7: user_owner (signer)
+    // Raydium CLMM SwapV2 account layout (verified from on-chain transactions):
+    // 0: payer (signer)
+    // 1: amm_config
+    // 2: pool_state
+    // 3: input_token_account
+    // 4: output_token_account
+    // 5: input_vault
+    // 6: output_vault
+    // 7: observation_state
+    // 8: token_program (SPL Token)
+    // 9: token_program_2022 (Token-2022)
+    // 10: memo_program
+    // 11: input_vault_mint
+    // 12: output_vault_mint
+    // remaining: tick_arrays (1 or more)
 
     let token_program = spl_token::id();
+    let token_program_2022 = Pubkey::from_str("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb")
+        .expect("Token-2022 program ID");
+    let memo_program = Pubkey::from_str("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr")
+        .expect("Memo program ID");
 
-    // Determine which vault is input and which is output based on swap direction
-    let (vault_input, vault_output) = if is_base_input {
-        (pool_state.token_vault_a, pool_state.token_vault_b)
+    // Determine which vault/mint is input and which is output based on swap direction
+    let (vault_input, vault_output, mint_input, mint_output) = if is_base_input {
+        (pool_state.token_vault_a, pool_state.token_vault_b, pool_state.token_mint_a, pool_state.token_mint_b)
     } else {
-        (pool_state.token_vault_b, pool_state.token_vault_a)
+        (pool_state.token_vault_b, pool_state.token_vault_a, pool_state.token_mint_b, pool_state.token_mint_a)
     };
 
+    // Calculate tick_array PDA based on current tick and tick spacing
+    let tick_array_start_index = get_tick_array_start_index(pool_state.tick_current, pool_state.tick_spacing);
+    let tick_array = derive_tick_array_pda(&pool_state.pool_id, tick_array_start_index, &program_id);
+
+    // DEBUG: tick_array derivation - using info! to ensure it appears
+    tracing::info!(
+        "🎯 CLMM tick_array: tick_current={}, tick_spacing={}, start_index={}, tick_array={}",
+        pool_state.tick_current, pool_state.tick_spacing, tick_array_start_index, tick_array
+    );
+
     let accounts = vec![
-        AccountMeta::new(pool_state.pool_id, false),
-        AccountMeta::new_readonly(token_program, false),
-        AccountMeta::new(*user_source_token, false),
-        AccountMeta::new(*user_dest_token, false),
-        AccountMeta::new(vault_input, false),
-        AccountMeta::new(vault_output, false),
-        AccountMeta::new(pool_state.observation_key, false),
-        AccountMeta::new_readonly(*user_owner, true), // Signer
+        AccountMeta::new(*user_owner, true),              // 0: payer (SIGNER)
+        AccountMeta::new_readonly(pool_state.amm_config, false), // 1: amm_config
+        AccountMeta::new(pool_state.pool_id, false),      // 2: pool_state
+        AccountMeta::new(*user_source_token, false),      // 3: input_token_account
+        AccountMeta::new(*user_dest_token, false),        // 4: output_token_account
+        AccountMeta::new(vault_input, false),             // 5: input_vault
+        AccountMeta::new(vault_output, false),            // 6: output_vault
+        AccountMeta::new(pool_state.observation_key, false), // 7: observation_state
+        AccountMeta::new_readonly(token_program, false),  // 8: token_program (SPL Token)
+        AccountMeta::new_readonly(token_program_2022, false), // 9: token_program_2022
+        AccountMeta::new_readonly(memo_program, false),   // 10: memo_program
+        AccountMeta::new_readonly(mint_input, false),     // 11: input_vault_mint
+        AccountMeta::new_readonly(mint_output, false),    // 12: output_vault_mint
+        AccountMeta::new(tick_array, false),              // 13+: tick_array (remaining accounts)
     ];
 
     Ok(Instruction {
@@ -154,16 +253,18 @@ mod tests {
 
     #[test]
     fn test_build_clmm_swap_instruction() {
-        // Create mock pool state
+        // Create mock pool state with all required fields
         let pool_id = Pubkey::new_unique();
         let pool_state = RaydiumClmmPoolState {
             pool_id,
+            amm_config: Pubkey::new_unique(),
             token_mint_a: Pubkey::new_unique(),
             token_mint_b: Pubkey::new_unique(),
             token_vault_a: Pubkey::new_unique(),
             token_vault_b: Pubkey::new_unique(),
             observation_key: Pubkey::new_unique(),
-            sqrt_price_x64: 1000000000000000000, // Example price
+            tick_spacing: 10,
+            sqrt_price_x64: 1000000000000000000,
             tick_current: 0,
         };
 
@@ -189,28 +290,30 @@ mod tests {
         assert_eq!(&instruction.data[0..8], &SWAP_INSTRUCTION_DISCRIMINATOR);
         assert_eq!(instruction.data.len(), 41); // 8 + 8 + 8 + 16 + 1 bytes
 
-        // Verify accounts count
-        assert_eq!(instruction.accounts.len(), 8);
+        // Verify accounts count (14 total: 13 fixed + 1 tick_array)
+        assert_eq!(instruction.accounts.len(), 14);
 
-        // Verify last account is signer (user_owner)
-        assert!(instruction.accounts[7].is_signer);
+        // Verify first account is signer (payer/user_owner)
+        assert!(instruction.accounts[0].is_signer);
 
         // Verify pool accounts match pool_state
-        assert_eq!(instruction.accounts[0].pubkey, pool_state.pool_id);
-        assert_eq!(instruction.accounts[4].pubkey, pool_state.token_vault_a); // Input vault (base)
-        assert_eq!(instruction.accounts[5].pubkey, pool_state.token_vault_b); // Output vault
-        assert_eq!(instruction.accounts[6].pubkey, pool_state.observation_key);
+        assert_eq!(instruction.accounts[2].pubkey, pool_state.pool_id);
+        assert_eq!(instruction.accounts[5].pubkey, pool_state.token_vault_a); // Input vault (base)
+        assert_eq!(instruction.accounts[6].pubkey, pool_state.token_vault_b); // Output vault
+        assert_eq!(instruction.accounts[7].pubkey, pool_state.observation_key);
     }
 
     #[test]
     fn test_swap_direction() {
         let pool_state = RaydiumClmmPoolState {
             pool_id: Pubkey::new_unique(),
+            amm_config: Pubkey::new_unique(),
             token_mint_a: Pubkey::new_unique(),
             token_mint_b: Pubkey::new_unique(),
             token_vault_a: Pubkey::new_unique(),
             token_vault_b: Pubkey::new_unique(),
             observation_key: Pubkey::new_unique(),
+            tick_spacing: 10,
             sqrt_price_x64: 1000000000000000000,
             tick_current: 0,
         };
@@ -228,9 +331,9 @@ mod tests {
         )
         .unwrap();
 
-        // Vault A should be input (index 4), Vault B should be output (index 5)
-        assert_eq!(ix_a_to_b.accounts[4].pubkey, pool_state.token_vault_a);
-        assert_eq!(ix_a_to_b.accounts[5].pubkey, pool_state.token_vault_b);
+        // Vault A should be input (index 5), Vault B should be output (index 6)
+        assert_eq!(ix_a_to_b.accounts[5].pubkey, pool_state.token_vault_a);
+        assert_eq!(ix_a_to_b.accounts[6].pubkey, pool_state.token_vault_b);
 
         // Test B → A swap
         let ix_b_to_a = build_raydium_clmm_swap_instruction(
@@ -245,8 +348,8 @@ mod tests {
         )
         .unwrap();
 
-        // Vault B should be input (index 4), Vault A should be output (index 5)
-        assert_eq!(ix_b_to_a.accounts[4].pubkey, pool_state.token_vault_b);
-        assert_eq!(ix_b_to_a.accounts[5].pubkey, pool_state.token_vault_a);
+        // Vault B should be input (index 5), Vault A should be output (index 6)
+        assert_eq!(ix_b_to_a.accounts[5].pubkey, pool_state.token_vault_b);
+        assert_eq!(ix_b_to_a.accounts[6].pubkey, pool_state.token_vault_a);
     }
 }

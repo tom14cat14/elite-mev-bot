@@ -96,6 +96,9 @@ pub mod mev_database_tracker;
 pub mod mev_sandwich_detector;
 pub mod pool_validator;
 
+// 0slot leader schedule optimization
+pub mod leader_schedule_manager;
+
 // Re-export main types for convenience
 pub use arbitrage_engine::{
     ArbitrageEngine, ArbitrageExecution, ArbitrageOpportunity, ArbitrageStats, TokenPair,
@@ -172,6 +175,7 @@ pub use transaction_processor::{
 };
 pub use volume_tracker::{SwapRecord, VolumeTracker};
 pub use wallet_manager::{TokenBalance, WalletBalanceInfo, WalletManager};
+pub use leader_schedule_manager::{LeaderScheduleManager, should_trade_current_slot};
 
 // Re-export ShredStream types
 pub use chrono::{DateTime, Utc};

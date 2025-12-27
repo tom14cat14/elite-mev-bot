@@ -15,11 +15,13 @@ pub const RAYDIUM_CLMM_PROGRAM_ID: &str = "CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7gr
 #[derive(Debug, Clone)]
 pub struct RaydiumClmmPoolState {
     pub pool_id: Pubkey,
+    pub amm_config: Pubkey,      // Added: Required for swap instruction
     pub token_mint_a: Pubkey,
     pub token_mint_b: Pubkey,
     pub token_vault_a: Pubkey,
     pub token_vault_b: Pubkey,
     pub observation_key: Pubkey,
+    pub tick_spacing: u16,       // Added: Required for tick_array calculation
     pub sqrt_price_x64: u128,
     pub tick_current: i32,
 }
@@ -27,57 +29,77 @@ pub struct RaydiumClmmPoolState {
 impl RaydiumClmmPoolState {
     /// Parse CLMM pool state from account data
     ///
-    /// Layout (from Raydium CLMM IDL):
-    /// - bump: [u8; 1] at offset 0
-    /// - amm_config: Pubkey (32 bytes) at offset 1
-    /// - owner: Pubkey (32 bytes) at offset 33
-    /// - token_mint_0: Pubkey (32 bytes) at offset 65
-    /// - token_mint_1: Pubkey (32 bytes) at offset 97
-    /// - token_vault_0: Pubkey (32 bytes) at offset 129
-    /// - token_vault_1: Pubkey (32 bytes) at offset 161
-    /// - observation_key: Pubkey (32 bytes) at offset 193
-    /// - tick_spacing: u16 (2 bytes) at offset 225
-    /// - liquidity: u128 (16 bytes) at offset 227
-    /// - sqrt_price_x64: u128 (16 bytes) at offset 243
-    /// - tick_current: i32 (4 bytes) at offset 259
+    /// ✅ CORRECTED (2025-12-07): Layout includes 8-byte discriminator + mint_decimals fields
+    /// Layout (from Raydium CLMM PoolState struct):
+    /// - discriminator: [u8; 8] at offset 0 (Anchor account discriminator)
+    /// - bump: [u8; 1] at offset 8
+    /// - amm_config: Pubkey (32 bytes) at offset 9
+    /// - owner: Pubkey (32 bytes) at offset 41
+    /// - token_mint_0: Pubkey (32 bytes) at offset 73
+    /// - token_mint_1: Pubkey (32 bytes) at offset 105
+    /// - token_vault_0: Pubkey (32 bytes) at offset 137
+    /// - token_vault_1: Pubkey (32 bytes) at offset 169
+    /// - observation_key: Pubkey (32 bytes) at offset 201
+    /// - mint_decimals_0: u8 at offset 233  ← MISSED BEFORE!
+    /// - mint_decimals_1: u8 at offset 234  ← MISSED BEFORE!
+    /// - tick_spacing: u16 (2 bytes) at offset 235  ← CORRECTED (+2)
+    /// - liquidity: u128 (16 bytes) at offset 237
+    /// - sqrt_price_x64: u128 (16 bytes) at offset 253  ← CORRECTED (+2)
+    /// - tick_current: i32 (4 bytes) at offset 269  ← CORRECTED (+2)
     /// ... (rest of fields not needed for basic swap)
     pub fn parse(pool_pubkey: &Pubkey, data: &[u8]) -> Result<Self> {
-        // Minimum size check
-        if data.len() < 263 {
+        // Minimum size check (with 8-byte discriminator + mint_decimals)
+        if data.len() < 273 {
             return Err(anyhow!(
-                "CLMM pool account data too small: {} bytes (expected at least 263)",
+                "CLMM pool account data too small: {} bytes (expected at least 273)",
                 data.len()
             ));
         }
 
-        // Parse pubkeys at their offsets
-        let token_mint_a = Self::parse_pubkey(data, 65)?;
-        let token_mint_b = Self::parse_pubkey(data, 97)?;
-        let token_vault_a = Self::parse_pubkey(data, 129)?;
-        let token_vault_b = Self::parse_pubkey(data, 161)?;
-        let observation_key = Self::parse_pubkey(data, 193)?;
+        // Parse pubkeys at their offsets (all +8 from original due to discriminator)
+        let amm_config = Self::parse_pubkey(data, 9)?;  // offset 9 (after discriminator + bump)
+        let token_mint_a = Self::parse_pubkey(data, 73)?;
+        let token_mint_b = Self::parse_pubkey(data, 105)?;
+        let token_vault_a = Self::parse_pubkey(data, 137)?;
+        let token_vault_b = Self::parse_pubkey(data, 169)?;
+        let observation_key = Self::parse_pubkey(data, 201)?;
 
-        // Parse sqrt_price_x64 (u128 at offset 243)
+        // Parse tick_spacing (u16 at offset 235 - after mint_decimals_0 and mint_decimals_1)
+        let tick_spacing = u16::from_le_bytes(
+            data[235..237]
+                .try_into()
+                .map_err(|e| anyhow!("Failed to parse tick_spacing: {:?}", e))?,
+        );
+
+        // Parse sqrt_price_x64 (u128 at offset 253)
         let sqrt_price_x64 = u128::from_le_bytes(
-            data[243..259]
+            data[253..269]
                 .try_into()
                 .map_err(|e| anyhow!("Failed to parse sqrt_price_x64: {:?}", e))?,
         );
 
-        // Parse tick_current (i32 at offset 259)
+        // Parse tick_current (i32 at offset 269)
         let tick_current = i32::from_le_bytes(
-            data[259..263]
+            data[269..273]
                 .try_into()
                 .map_err(|e| anyhow!("Failed to parse tick_current: {:?}", e))?,
         );
 
+        // DEBUG: pool parsing - using info! to ensure it appears
+        tracing::info!(
+            "📊 CLMM parsed: amm_config={}, tick_current={}, tick_spacing={}",
+            amm_config, tick_current, tick_spacing
+        );
+
         Ok(RaydiumClmmPoolState {
             pool_id: *pool_pubkey,
+            amm_config,
             token_mint_a,
             token_mint_b,
             token_vault_a,
             token_vault_b,
             observation_key,
+            tick_spacing,
             sqrt_price_x64,
             tick_current,
         })

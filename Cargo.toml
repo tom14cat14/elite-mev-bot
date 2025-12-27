@@ -80,6 +80,9 @@ async-trait = "0.1"
 # Parking lot for better performance
 parking_lot = "0.12"
 
+# ⚡ GROK OPTIMIZATION: Concurrent hashmap for ATA caching
+dashmap = "5.5"
+
 # WebSocket support
 tokio-tungstenite = "0.20"
 

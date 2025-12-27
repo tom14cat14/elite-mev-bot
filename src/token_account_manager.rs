@@ -2,8 +2,11 @@
 //!
 //! Manages Associated Token Accounts (ATAs) for sandwich trades.
 //! Creates or fetches ATAs for tokens we need to swap.
+//!
+//! ⚡ GROK OPTIMIZATION: Uses DashMap for lock-free ATA caching
 
 use anyhow::{anyhow, Result};
+use dashmap::DashMap;
 use solana_client::rpc_client::RpcClient;
 use solana_sdk::{
     commitment_config::CommitmentConfig,
@@ -14,10 +17,21 @@ use solana_sdk::{
     system_program,
     transaction::Transaction,
 };
-use tracing::{info, warn};
+use std::str::FromStr;
+use once_cell::sync::Lazy;
+use tracing::{debug, info, warn};
+
+// ⚡ GROK OPTIMIZATION: Lock-free ATA cache using DashMap
+// Key: "wallet:mint" string, Value: resolved ATA address
+// This eliminates mutex contention and provides O(1) lookups
+static VERIFIED_ATAS: Lazy<DashMap<String, Pubkey>> = Lazy::new(|| DashMap::new());
 
 // Associated Token Program ID (well-known constant)
 const ASSOCIATED_TOKEN_PROGRAM_ID: &str = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
+// Token-2022 Program ID
+const TOKEN_2022_PROGRAM_ID: &str = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
+// Wrapped SOL mint (always uses standard Token Program)
+const WSOL_MINT: &str = "So11111111111111111111111111111111111111112";
 
 /// Token account manager for sandwich trades
 pub struct TokenAccountManager {
@@ -32,63 +46,162 @@ impl TokenAccountManager {
         }
     }
 
+    /// Detect if a mint is Token-2022 or standard Token Program
+    /// Returns the correct token program ID for this mint
+    ///
+    /// Special handling:
+    /// - WSOL is always standard Token Program
+    /// - Other mints: query on-chain, default to SPL Token if lookup fails
+    ///   (pump.fun bonding curve tokens use standard SPL Token, NOT Token-2022)
+    pub fn get_token_program_for_mint(&self, mint: &Pubkey) -> Pubkey {
+        let token_2022_id = Pubkey::from_str(TOKEN_2022_PROGRAM_ID).unwrap();
+        let wsol_mint = Pubkey::from_str(WSOL_MINT).unwrap();
+
+        // WSOL is always standard Token Program
+        if *mint == wsol_mint {
+            info!("🔶 Mint {} is WSOL (always standard SPL Token)", mint);
+            return spl_token::id();
+        }
+
+        // Query the mint account to determine its owner (token program)
+        match self.rpc_client.get_account(mint) {
+            Ok(account) => {
+                if account.owner == token_2022_id {
+                    info!("🔷 Mint {} is Token-2022 (owner: {})", mint, account.owner);
+                    token_2022_id
+                } else if account.owner == spl_token::id() {
+                    info!("🔶 Mint {} is standard SPL Token (owner: {})", mint, account.owner);
+                    spl_token::id()
+                } else {
+                    // Unknown owner - log it and default to SPL Token
+                    warn!(
+                        "⚠️  Mint {} has unknown owner {} - defaulting to SPL Token",
+                        mint, account.owner
+                    );
+                    spl_token::id()
+                }
+            }
+            Err(e) => {
+                // Default to SPL Token for pump.fun meme tokens
+                // pump.fun bonding curve tokens use standard SPL Token, NOT Token-2022
+                warn!(
+                    "⚠️  Could not determine token program for mint {} ({}), defaulting to SPL Token",
+                    mint, e
+                );
+                spl_token::id()
+            }
+        }
+    }
+
     /// Get or create an Associated Token Account (ATA) for a wallet and mint
     ///
     /// Returns the ATA address. If the account doesn't exist, it will be created.
+    /// Checks BOTH token programs (SPL Token and Token-2022) to avoid "already exists" errors.
+    /// Uses a cache to prevent repeated creation attempts for the same mint.
     pub fn get_or_create_ata(&self, wallet: &Keypair, mint: &Pubkey) -> Result<Pubkey> {
         let wallet_pubkey = wallet.pubkey();
+        let token_2022_id = Pubkey::from_str(TOKEN_2022_PROGRAM_ID).unwrap();
+        let spl_token_id = spl_token::id();
 
-        // Calculate ATA address manually
-        let ata_address = Self::get_ata_address(&wallet_pubkey, mint);
+        // Calculate ATAs for BOTH possible token programs
+        let ata_spl = Self::get_ata_address_with_program(&wallet_pubkey, mint, &spl_token_id);
+        let ata_2022 = Self::get_ata_address_with_program(&wallet_pubkey, mint, &token_2022_id);
 
-        // Check if ATA already exists
-        match self.rpc_client.get_account(&ata_address) {
-            Ok(_account) => {
-                info!("✅ ATA already exists: {} (mint: {})", ata_address, mint);
+        // Create cache key (cloned for multiple potential inserts)
+        let cache_key = format!("{}:{}", wallet_pubkey, mint);
+
+        // ⚡ GROK OPTIMIZATION: Lock-free cache lookup using DashMap
+        // Returns cached ATA address instantly without any RPC calls
+        if let Some(cached_ata) = VERIFIED_ATAS.get(&cache_key) {
+            debug!("⚡ SPEED: ATA from cache (0ms): {} (mint: {})", *cached_ata, mint);
+            return Ok(*cached_ata);
+        }
+
+        // Check if SPL Token ATA already exists
+        if let Ok(_account) = self.rpc_client.get_account(&ata_spl) {
+            info!("✅ ATA already exists (SPL Token): {} (mint: {})", ata_spl, mint);
+            // ⚡ GROK OPTIMIZATION: Lock-free cache insert
+            VERIFIED_ATAS.insert(cache_key.clone(), ata_spl);
+            return Ok(ata_spl);
+        }
+
+        // Check if Token-2022 ATA already exists
+        if let Ok(_account) = self.rpc_client.get_account(&ata_2022) {
+            info!("✅ ATA already exists (Token-2022): {} (mint: {})", ata_2022, mint);
+            // ⚡ GROK OPTIMIZATION: Lock-free cache insert
+            VERIFIED_ATAS.insert(cache_key.clone(), ata_2022);
+            return Ok(ata_2022);
+        }
+
+        // Neither ATA exists - detect correct token program and create
+        let token_program_id = self.get_token_program_for_mint(mint);
+        let ata_address = Self::get_ata_address_with_program(&wallet_pubkey, mint, &token_program_id);
+
+        info!(
+            "📝 Creating ATA for wallet {} and mint {} (program: {})",
+            &wallet_pubkey, mint, token_program_id
+        );
+
+        // Create ATA instruction with correct token program
+        let create_ata_ix = Self::build_create_ata_instruction_with_program(&wallet_pubkey, mint, &token_program_id);
+
+        // Build and send transaction
+        let recent_blockhash = self
+            .rpc_client
+            .get_latest_blockhash()
+            .map_err(|e| anyhow!("Failed to get recent blockhash: {}", e))?;
+
+        let transaction = Transaction::new_signed_with_payer(
+            &[create_ata_ix],
+            Some(&wallet_pubkey),
+            &[wallet],
+            recent_blockhash,
+        );
+
+        // Send transaction
+        match self.rpc_client.send_and_confirm_transaction(&transaction) {
+            Ok(signature) => {
+                info!("✅ Created ATA: {} | Signature: {}", ata_address, signature);
+                // ⚡ GROK OPTIMIZATION: Lock-free cache insert after successful creation
+                VERIFIED_ATAS.insert(cache_key, ata_address);
                 Ok(ata_address)
             }
-            Err(_) => {
-                // ATA doesn't exist, create it
-                info!(
-                    "📝 Creating ATA for wallet {} and mint {}",
-                    &wallet_pubkey, mint
-                );
+            Err(e) => {
+                let err_str = e.to_string();
 
-                // Create ATA instruction manually
-                let create_ata_ix = Self::build_create_ata_instruction(&wallet_pubkey, mint);
-
-                // Build and send transaction
-                let recent_blockhash = self
-                    .rpc_client
-                    .get_latest_blockhash()
-                    .map_err(|e| anyhow!("Failed to get recent blockhash: {}", e))?;
-
-                let transaction = Transaction::new_signed_with_payer(
-                    &[create_ata_ix],
-                    Some(&wallet_pubkey),
-                    &[wallet],
-                    recent_blockhash,
-                );
-
-                // Send transaction
-                match self.rpc_client.send_and_confirm_transaction(&transaction) {
-                    Ok(signature) => {
-                        info!("✅ Created ATA: {} | Signature: {}", ata_address, signature);
-                        Ok(ata_address)
-                    }
-                    Err(e) => {
-                        // Check if error is because account was created by another transaction
-                        if let Ok(_account) = self.rpc_client.get_account(&ata_address) {
-                            warn!(
-                                "⚠️  ATA creation failed but account exists (race condition): {}",
-                                ata_address
-                            );
-                            Ok(ata_address)
-                        } else {
-                            Err(anyhow!("Failed to create ATA: {}", e))
-                        }
-                    }
+                // Error 0x2 = AccountAlreadyInitialized - this is OK, ATA exists
+                // Error 0x0 = Success (shouldn't happen in error branch but handle anyway)
+                if err_str.contains("0x2") || err_str.contains("already in use") ||
+                   err_str.contains("AlreadyInitialized") || err_str.contains("AccountAlreadyInitialized") {
+                    // ATA already exists - add to cache and return the computed address directly
+                    // (RPC lookup may fail but we KNOW from error 0x2 that account exists)
+                    info!("✅ ATA already exists (detected via error 0x2): {} (adding to cache)", ata_address);
+                    // ⚡ GROK OPTIMIZATION: Lock-free cache insert
+                    VERIFIED_ATAS.insert(cache_key, ata_address);
+                    return Ok(ata_address);
                 }
+
+                // Check if error is because account was created by another transaction (race condition)
+                // Check BOTH possible ATAs
+                if let Ok(_account) = self.rpc_client.get_account(&ata_spl) {
+                    warn!(
+                        "⚠️  ATA creation failed but SPL Token ATA exists (race condition): {}",
+                        ata_spl
+                    );
+                    // ⚡ GROK OPTIMIZATION: Lock-free cache insert
+                    VERIFIED_ATAS.insert(cache_key.clone(), ata_spl);
+                    return Ok(ata_spl);
+                }
+                if let Ok(_account) = self.rpc_client.get_account(&ata_2022) {
+                    warn!(
+                        "⚠️  ATA creation failed but Token-2022 ATA exists (race condition): {}",
+                        ata_2022
+                    );
+                    // ⚡ GROK OPTIMIZATION: Lock-free cache insert
+                    VERIFIED_ATAS.insert(cache_key, ata_2022);
+                    return Ok(ata_2022);
+                }
+                Err(anyhow!("Failed to create ATA: {}", e))
             }
         }
     }
@@ -125,18 +238,28 @@ impl TokenAccountManager {
     }
 
     /// Build the create ATA instruction (for use in bundles)
+    /// Legacy function - defaults to standard Token Program
+    pub fn build_create_ata_instruction(wallet_pubkey: &Pubkey, mint: &Pubkey) -> Instruction {
+        Self::build_create_ata_instruction_with_program(wallet_pubkey, mint, &spl_token::id())
+    }
+
+    /// Build the create ATA instruction with specific token program
     ///
     /// This doesn't execute the instruction, just returns it.
     /// Useful for including ATA creation in JITO bundles.
-    pub fn build_create_ata_instruction(wallet_pubkey: &Pubkey, mint: &Pubkey) -> Instruction {
+    /// Supports both standard Token Program and Token-2022.
+    pub fn build_create_ata_instruction_with_program(
+        wallet_pubkey: &Pubkey,
+        mint: &Pubkey,
+        token_program_id: &Pubkey
+    ) -> Instruction {
         let ata_program_id =
             Pubkey::try_from(ASSOCIATED_TOKEN_PROGRAM_ID).expect("Invalid ATA program ID");
 
-        let ata_address = Self::get_ata_address(wallet_pubkey, mint);
+        let ata_address = Self::get_ata_address_with_program(wallet_pubkey, mint, token_program_id);
 
         // Create ATA instruction using the correct format
         // The create instruction is idempotent (discriminator: 1 byte = 0x01 for newer versions, or empty for older)
-        // Modern versions use empty data for backwards compatibility
         Instruction {
             program_id: ata_program_id,
             accounts: vec![
@@ -145,7 +268,7 @@ impl TokenAccountManager {
                 AccountMeta::new_readonly(*wallet_pubkey, false), // 2: owner
                 AccountMeta::new_readonly(*mint, false), // 3: mint
                 AccountMeta::new_readonly(system_program::id(), false), // 4: system program
-                AccountMeta::new_readonly(spl_token::id(), false), // 5: token program
+                AccountMeta::new_readonly(*token_program_id, false), // 5: token program (standard or 2022)
             ],
             // Use instruction discriminator 1 for create_idempotent (modern standard)
             data: vec![1],
@@ -153,14 +276,18 @@ impl TokenAccountManager {
     }
 
     /// Get ATA address for a wallet and mint (doesn't check if it exists)
+    /// Legacy function - defaults to standard Token Program
+    pub fn get_ata_address(wallet_pubkey: &Pubkey, mint: &Pubkey) -> Pubkey {
+        Self::get_ata_address_with_program(wallet_pubkey, mint, &spl_token::id())
+    }
+
+    /// Get ATA address with specific token program
     ///
     /// Uses PDA derivation: find_program_address([wallet, token_program, mint], ata_program)
-    pub fn get_ata_address(wallet_pubkey: &Pubkey, mint: &Pubkey) -> Pubkey {
+    /// Supports both standard Token Program and Token-2022.
+    pub fn get_ata_address_with_program(wallet_pubkey: &Pubkey, mint: &Pubkey, token_program_id: &Pubkey) -> Pubkey {
         let ata_program_id =
             Pubkey::try_from(ASSOCIATED_TOKEN_PROGRAM_ID).expect("Invalid ATA program ID");
-
-        // Create binding for token program ID to extend lifetime
-        let token_program_id = spl_token::id();
 
         // ATA address = PDA derived from [wallet, token_program_id, mint]
         let seeds = &[

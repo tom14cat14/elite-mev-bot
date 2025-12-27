@@ -39,7 +39,7 @@
 - **Status**: Production ready with JITO best practices
 - **Strategy**: Delayed sandwich (1-minute anti-rug delay)
 - **Location**: `src/bin/elite_mev_bot_v2_1_production.rs`
-- **Wallet**: `CWfwucpmfQveUY8D14SEuc5YK6BbVt4EhATroznU7ktT` (0.1 SOL)
+- **Wallet**: `2MwDTydE7RshNSUmofotD9jD7MmaBtR7ZY26wVkJ3ZJ7` (1.686 SOL)
 - **Build**: ✅ Compiles successfully
 
 ---

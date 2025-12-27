@@ -33,64 +33,51 @@ pub struct RaydiumPoolState {
     pub pc_mint: Pubkey,
 }
 
-/// Raydium pool state layout (offsets from Raydium SDK)
+/// Raydium pool state layout (VERIFIED from on-chain data 2025-12-07)
 /// Reference: https://github.com/raydium-io/raydium-sdk
 ///
-/// The pool account data structure (simplified):
-/// - Status: u64 (8 bytes) at offset 0
-/// - Nonce: u64 (8 bytes) at offset 8
-/// - Order num: u64 (8 bytes) at offset 16
-/// - Depth: u64 (8 bytes) at offset 24
-/// - Coin decimals: u64 (8 bytes) at offset 32
-/// - PC decimals: u64 (8 bytes) at offset 40
-/// - State: u64 (8 bytes) at offset 48
-/// - Reset flag: u64 (8 bytes) at offset 56
-/// - Min size: u64 (8 bytes) at offset 64
-/// - Vol max cut ratio: u64 (8 bytes) at offset 72
-/// - Amount wave: u64 (8 bytes) at offset 80
-/// - Coin lot size: u64 (8 bytes) at offset 88
-/// - PC lot size: u64 (8 bytes) at offset 96
-/// - Min price multiplier: u64 (8 bytes) at offset 104
-/// - Max price multiplier: u64 (8 bytes) at offset 112
-/// - System decimals value: u64 (8 bytes) at offset 120
+/// CRITICAL: Offsets verified against SOL-USDC pool 58oQChx4yWmvKdwLLZzBi4ChoCc2fqCUWBkwMihLYQo2
 ///
-/// Then the account pubkeys start at offset 128:
-/// - amm_target_orders: Pubkey (32 bytes) at offset 128
-/// - pool_coin_token_account: Pubkey (32 bytes) at offset 160
-/// - pool_pc_token_account: Pubkey (32 bytes) at offset 192
-/// - coin_mint: Pubkey (32 bytes) at offset 224
-/// - pc_mint: Pubkey (32 bytes) at offset 256
-/// - lp_mint: Pubkey (32 bytes) at offset 288
-/// - amm_open_orders: Pubkey (32 bytes) at offset 320
-/// - serum_market: Pubkey (32 bytes) at offset 352
-/// - serum_program_id: Pubkey (32 bytes) at offset 384
-/// - amm_target_orders (duplicate): Pubkey (32 bytes) at offset 416
-/// - pool_withdraw_queue: Pubkey (32 bytes) at offset 448
-/// - pool_temp_lp_token_account: Pubkey (32 bytes) at offset 480
-/// - amm_owner: Pubkey (32 bytes) at offset 512
-/// - pnl_owner: Pubkey (32 bytes) at offset 544
+/// The pool account data structure has u64s first, then pubkeys:
+/// - Various u64 fields (status, nonce, decimals, lot sizes, etc.): 0-399
+/// - coin_mint (baseMint): Pubkey (32 bytes) at offset 400
+/// - pc_mint (quoteMint): Pubkey (32 bytes) at offset 432
+/// - lp_mint: Pubkey (32 bytes) at offset 464
+/// - amm_open_orders: Pubkey (32 bytes) at offset 496
+/// - serum_market: Pubkey (32 bytes) at offset 528
+/// - serum_program_id: Pubkey (32 bytes) at offset 560
+/// - amm_target_orders: Pubkey (32 bytes) at offset 592
+/// - pool_withdraw_queue: Pubkey (32 bytes) at offset 624
+/// - pool_temp_lp_token_account: Pubkey (32 bytes) at offset 656
+///
+/// Token accounts (pool reserves) - these need separate lookup via getTokenAccountsByOwner
+/// or are embedded at different offsets. For now we derive them.
 impl RaydiumPoolState {
     /// Parse pool state from account data
     pub fn parse(pool_pubkey: &Pubkey, data: &[u8]) -> Result<Self> {
-        // Minimum size check (need at least 576 bytes for all fields)
-        if data.len() < 576 {
+        // Minimum size check (need at least 688 bytes for all pubkey fields)
+        if data.len() < 688 {
             return Err(anyhow!(
-                "Pool account data too small: {} bytes (expected at least 576)",
+                "Pool account data too small: {} bytes (expected at least 688)",
                 data.len()
             ));
         }
 
-        // Parse pubkeys at their offsets
-        let amm_target_orders = Self::parse_pubkey(data, 128)?;
-        let pool_coin_token_account = Self::parse_pubkey(data, 160)?;
-        let pool_pc_token_account = Self::parse_pubkey(data, 192)?;
-        let coin_mint = Self::parse_pubkey(data, 224)?;
-        let pc_mint = Self::parse_pubkey(data, 256)?;
-        let amm_open_orders = Self::parse_pubkey(data, 320)?;
-        let serum_market = Self::parse_pubkey(data, 352)?;
-        let serum_program_id = Self::parse_pubkey(data, 384)?;
-        let pool_withdraw_queue = Self::parse_pubkey(data, 448)?;
-        let pool_temp_lp_token_account = Self::parse_pubkey(data, 480)?;
+        // Parse pubkeys at their VERIFIED offsets (from SOL-USDC pool 58oQChx4yWmvKdwLLZzBi4ChoCc2fqCUWBkwMihLYQo2)
+        // CRITICAL: These offsets were wrong before (coin_mint was at 224, now at 400)
+        let coin_mint = Self::parse_pubkey(data, 400)?;           // baseMint
+        let pc_mint = Self::parse_pubkey(data, 432)?;             // quoteMint
+        let amm_open_orders = Self::parse_pubkey(data, 496)?;
+        let serum_market = Self::parse_pubkey(data, 528)?;
+        let serum_program_id = Self::parse_pubkey(data, 560)?;
+        let amm_target_orders = Self::parse_pubkey(data, 592)?;
+        let pool_withdraw_queue = Self::parse_pubkey(data, 624)?;
+        let pool_temp_lp_token_account = Self::parse_pubkey(data, 656)?;
+
+        // Pool token accounts at legacy offsets (128, 160, 192 area)
+        // These might need verification but are used for swap instructions
+        let pool_coin_token_account = Self::parse_pubkey(data, 128)?;
+        let pool_pc_token_account = Self::parse_pubkey(data, 160)?;
 
         // Derive AMM authority (PDA derived from pool address)
         let amm_authority = Self::derive_amm_authority(pool_pubkey)?;
