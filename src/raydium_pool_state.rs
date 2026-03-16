@@ -65,8 +65,8 @@ impl RaydiumPoolState {
 
         // Parse pubkeys at their VERIFIED offsets (from SOL-USDC pool 58oQChx4yWmvKdwLLZzBi4ChoCc2fqCUWBkwMihLYQo2)
         // CRITICAL: These offsets were wrong before (coin_mint was at 224, now at 400)
-        let coin_mint = Self::parse_pubkey(data, 400)?;           // baseMint
-        let pc_mint = Self::parse_pubkey(data, 432)?;             // quoteMint
+        let coin_mint = Self::parse_pubkey(data, 400)?; // baseMint
+        let pc_mint = Self::parse_pubkey(data, 432)?; // quoteMint
         let amm_open_orders = Self::parse_pubkey(data, 496)?;
         let serum_market = Self::parse_pubkey(data, 528)?;
         let serum_program_id = Self::parse_pubkey(data, 560)?;
