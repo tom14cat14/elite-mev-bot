@@ -1459,7 +1459,7 @@ async fn main() -> Result<()> {
     // (Note: This binary's own info!/warn!/etc macros still use println)
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
-        .with_target(true)  // Show module paths for better debugging
+        .with_target(true) // Show module paths for better debugging
         .init();
 
     // Simplified logging initialization (no external deps)
@@ -1820,7 +1820,7 @@ async fn main() -> Result<()> {
         prediction_confidence_threshold: 0.8,
     };
 
-    let new_coin_detector = Arc::new(RwLock::new(
+    let _new_coin_detector = Arc::new(RwLock::new(
         crate::pumpfun_new_coin_detector::PumpFunNewCoinDetector::new(detector_config)?,
     ));
 
@@ -1830,7 +1830,7 @@ async fn main() -> Result<()> {
     perform_safety_verification(&ultra_config, &trading_keypair_arc).await?;
 
     // Initialize token filter
-    let shared_filter = Arc::new(ShredStreamTokenFilter::new(
+    let _shared_filter = Arc::new(ShredStreamTokenFilter::new(
         crate::market_cap_filter::MarketCapThresholds {
             minimum_market_cap_usd: 0.0, // No minimum for PumpFun
             minimum_volume_24h_usd: ultra_config.min_volume_usd_per_minute * 24.0 * 60.0, // Convert per-minute to 24h
@@ -1841,8 +1841,8 @@ async fn main() -> Result<()> {
     ));
 
     // Initialize ultra-speed metrics
-    let metrics = Arc::new(Mutex::new(UltraSpeedMetrics::default()));
-    let enhanced_config = Arc::new(Mutex::new(ultra_config.clone()));
+    let _metrics = Arc::new(Mutex::new(UltraSpeedMetrics::default()));
+    let _enhanced_config = Arc::new(Mutex::new(ultra_config.clone()));
 
     // GROK ITERATION 6 FIX #1: Initialize Safety Infrastructure
     info!("🛡️  Initializing safety infrastructure...");
@@ -2069,13 +2069,14 @@ async fn main() -> Result<()> {
 
     let mut total_trades = 0u64;
     let mut successful_trades = 0u64;
-    let total_profit_sol = 0.0f64;
+    let _total_profit_sol = 0.0f64;
     let mut total_opportunities = 0u64;
     let mut total_scans = 0u64;
 
     // Track pools that have failed (ATA creation issues, etc.) - skip temporarily, retry after cooldown
     // Uses HashMap<pool_address, failure_timestamp> instead of permanent HashSet
-    let mut failed_pools: std::collections::HashMap<String, std::time::Instant> = std::collections::HashMap::new();
+    let mut failed_pools: std::collections::HashMap<String, std::time::Instant> =
+        std::collections::HashMap::new();
     const FAILED_POOL_COOLDOWN_SECS: u64 = 120; // Retry failed pools after 2 minutes
 
     // Initialize ShredStream Processor for DIRECT swap detection (not cached prices!)
@@ -2271,7 +2272,7 @@ async fn execute_sandwich_opportunity(
     opportunity: &crate::mev_sandwich_detector::SandwichOpportunity,
     jito_client: &Arc<JitoBundleClient>,
     trading_keypair: &Arc<Keypair>,
-    safety_limits: &Arc<SafetyLimits>,
+    _safety_limits: &Arc<SafetyLimits>,
     paper_trading: bool,
     db_tracker: &Arc<MevDatabaseTracker>,
 ) -> Result<bool> {
@@ -2298,7 +2299,11 @@ async fn execute_sandwich_opportunity(
     // Remote leaders = 100-200ms latency = victim confirms before our bundle
     let rpc_url_check = std::env::var("SOLANA_RPC_ENDPOINT")
         .unwrap_or_else(|_| "https://api.mainnet-beta.solana.com".to_string());
-    if !shared_bot_infrastructure::leader_schedule_manager::should_trade_current_slot(&rpc_url_check).await {
+    if !shared_bot_infrastructure::leader_schedule_manager::should_trade_current_slot(
+        &rpc_url_check,
+    )
+    .await
+    {
         debug!("⚡ 0SLOT: SKIPPING - remote leader, victim would confirm first");
         return Ok(false);
     }
@@ -2322,7 +2327,10 @@ async fn execute_sandwich_opportunity(
     let balance_lamports = match rpc_client.get_balance(&trading_keypair.pubkey()) {
         Ok(b) => b,
         Err(e) => {
-            warn!("⚠️ Failed to get wallet balance: {} - skipping opportunity", e);
+            warn!(
+                "⚠️ Failed to get wallet balance: {} - skipping opportunity",
+                e
+            );
             return Ok(false);
         }
     };
@@ -2382,11 +2390,11 @@ async fn execute_sandwich_opportunity(
     // CRITICAL: This fee calculation determines profitability threshold
     let jito_fee = 0.005; // 0.005 SOL - matches actual tip sent in bundle submission
     let gas_fee = 0.0001;
-    let base_total_fees = jito_fee + gas_fee;  // 0.0051 SOL
+    let base_total_fees = jito_fee + gas_fee; // 0.0051 SOL
 
     // Fee buffer multiplier: 1.2x (reduced from 1.5x since fee is now accurate)
     let fee_buffer_multiplier = 1.2;
-    let effective_total_fees = base_total_fees * fee_buffer_multiplier;  // 0.00612 SOL
+    let effective_total_fees = base_total_fees * fee_buffer_multiplier; // 0.00612 SOL
 
     // Volatility buffer
     let volatility_buffer = if enable_bonding_curve {
@@ -2539,20 +2547,24 @@ async fn execute_sandwich_opportunity(
                     crate::token_account_manager::TokenAccountManager::new(rpc_url);
 
                 // Get correct token programs for each mint
-                let coin_program = token_account_manager.get_token_program_for_mint(&pool_state.coin_mint);
-                let pc_program = token_account_manager.get_token_program_for_mint(&pool_state.pc_mint);
+                let coin_program =
+                    token_account_manager.get_token_program_for_mint(&pool_state.coin_mint);
+                let pc_program =
+                    token_account_manager.get_token_program_for_mint(&pool_state.pc_mint);
 
                 // Compute ATA addresses (deterministic - doesn't require RPC)
-                let coin_ata = crate::token_account_manager::TokenAccountManager::get_ata_address_with_program(
-                    &trading_keypair.pubkey(),
-                    &pool_state.coin_mint,
-                    &coin_program,
-                );
-                let pc_ata = crate::token_account_manager::TokenAccountManager::get_ata_address_with_program(
-                    &trading_keypair.pubkey(),
-                    &pool_state.pc_mint,
-                    &pc_program,
-                );
+                let coin_ata =
+                    crate::token_account_manager::TokenAccountManager::get_ata_address_with_program(
+                        &trading_keypair.pubkey(),
+                        &pool_state.coin_mint,
+                        &coin_program,
+                    );
+                let pc_ata =
+                    crate::token_account_manager::TokenAccountManager::get_ata_address_with_program(
+                        &trading_keypair.pubkey(),
+                        &pool_state.pc_mint,
+                        &pc_program,
+                    );
 
                 // Build idempotent ATA creation instructions (will succeed even if ATA exists)
                 let coin_ata_ix = crate::token_account_manager::TokenAccountManager::build_create_ata_instruction_with_program(
@@ -2594,9 +2606,15 @@ async fn execute_sandwich_opportunity(
                 let min_meme_out = estimated_meme_tokens * (10000 - slippage_bps) / 10000;
 
                 info!("📊 Sandwich calculations:");
-                info!("   Position: {} lamports ({:.4} SOL)", position_lamports, position_size_sol);
+                info!(
+                    "   Position: {} lamports ({:.4} SOL)",
+                    position_lamports, position_size_sol
+                );
                 info!("   Expected meme tokens: ~{}", estimated_meme_tokens);
-                info!("   Min meme out (with {}bps slippage): {}", slippage_bps, min_meme_out);
+                info!(
+                    "   Min meme out (with {}bps slippage): {}",
+                    slippage_bps, min_meme_out
+                );
 
                 // ============================================
                 // STEP 1: BUILD FRONTRUN INSTRUCTION (BUY MEME)
@@ -2607,11 +2625,11 @@ async fn execute_sandwich_opportunity(
                 info!("🔨 Building FRONTRUN instruction (buy meme with SOL)...");
                 let frontrun_ix = match crate::raydium_swap_builder::build_frontrun_instruction(
                     pool_state,
-                    &pc_ata,    // Source: SOL (what we spend)
-                    &coin_ata,  // Dest: meme token (what we receive)
+                    &pc_ata,   // Source: SOL (what we spend)
+                    &coin_ata, // Dest: meme token (what we receive)
                     &trading_keypair.pubkey(),
-                    position_lamports,  // Amount of SOL to spend
-                    min_meme_out,       // Minimum meme tokens to receive
+                    position_lamports, // Amount of SOL to spend
+                    min_meme_out,      // Minimum meme tokens to receive
                 ) {
                     Ok(ix) => {
                         info!("✅ FRONTRUN instruction built successfully");
@@ -2635,19 +2653,27 @@ async fn execute_sandwich_opportunity(
                 // Source: coin_ata (meme we're selling)
                 // Dest: pc_ata (SOL we're receiving)
                 let expected_profit_pct = estimated_net_profit / position_size_sol;
-                let min_sol_back = (position_lamports as f64 * (1.0 + expected_profit_pct * 0.5)) as u64; // 50% of expected profit as minimum
+                let min_sol_back =
+                    (position_lamports as f64 * (1.0 + expected_profit_pct * 0.5)) as u64; // 50% of expected profit as minimum
 
                 info!("🔨 Building BACKRUN instruction (sell meme for SOL)...");
-                info!("   Selling: ~{} meme tokens (expected from frontrun)", estimated_meme_tokens);
-                info!("   Min SOL back: {} lamports ({:.4} SOL)", min_sol_back, min_sol_back as f64 / 1e9);
+                info!(
+                    "   Selling: ~{} meme tokens (expected from frontrun)",
+                    estimated_meme_tokens
+                );
+                info!(
+                    "   Min SOL back: {} lamports ({:.4} SOL)",
+                    min_sol_back,
+                    min_sol_back as f64 / 1e9
+                );
 
                 let backrun_ix = match crate::raydium_swap_builder::build_backrun_instruction(
                     pool_state,
-                    &coin_ata,  // Source: meme token (what we sell)
-                    &pc_ata,    // Dest: SOL (what we receive)
+                    &coin_ata, // Source: meme token (what we sell)
+                    &pc_ata,   // Dest: SOL (what we receive)
                     &trading_keypair.pubkey(),
-                    estimated_meme_tokens,  // Amount of meme tokens to sell (from frontrun)
-                    min_sol_back,           // Minimum SOL to receive
+                    estimated_meme_tokens, // Amount of meme tokens to sell (from frontrun)
+                    min_sol_back,          // Minimum SOL to receive
                 ) {
                     Ok(ix) => {
                         info!("✅ BACKRUN instruction built successfully");
@@ -2673,12 +2699,17 @@ async fn execute_sandwich_opportunity(
                 // Grok audit: "ALL transactions in a JITO bundle need the SAME blockhash"
                 let blockhash_to_use = match &opportunity.victim_blockhash {
                     Some(bh) => {
-                        info!("✅ Using VICTIM's blockhash: {} (CRITICAL for bundle success)", bh);
+                        info!(
+                            "✅ Using VICTIM's blockhash: {} (CRITICAL for bundle success)",
+                            bh
+                        );
                         *bh
                     }
                     None => {
                         // Fallback to fetching fresh blockhash if victim's not available
-                        warn!("⚠️  No victim blockhash - fetching fresh (may cause bundle failure)");
+                        warn!(
+                            "⚠️  No victim blockhash - fetching fresh (may cause bundle failure)"
+                        );
                         match rpc_client.get_latest_blockhash() {
                             Ok(blockhash) => blockhash,
                             Err(e) => {
@@ -2696,7 +2727,7 @@ async fn execute_sandwich_opportunity(
                 // Build frontrun transaction (includes ATA creation for atomicity)
                 // ATA instructions are idempotent - they succeed even if ATA already exists
                 let frontrun_tx = solana_sdk::transaction::Transaction::new_signed_with_payer(
-                    &[coin_ata_ix, pc_ata_ix, frontrun_ix],  // ATA creation + frontrun swap
+                    &[coin_ata_ix, pc_ata_ix, frontrun_ix], // ATA creation + frontrun swap
                     Some(&trading_keypair.pubkey()),
                     &[trading_keypair],
                     blockhash_to_use,
@@ -2705,7 +2736,7 @@ async fn execute_sandwich_opportunity(
 
                 // Build backrun transaction
                 let backrun_tx = solana_sdk::transaction::Transaction::new_signed_with_payer(
-                    &[backrun_ix],  // Just the backrun swap (sell meme)
+                    &[backrun_ix], // Just the backrun swap (sell meme)
                     Some(&trading_keypair.pubkey()),
                     &[trading_keypair],
                     blockhash_to_use,
@@ -2714,7 +2745,11 @@ async fn execute_sandwich_opportunity(
 
                 // Grok recommended: 0.005 SOL minimum tip for MEV bundles
                 let jito_tip_lamports = 5_000_000u64; // 0.005 SOL - Grok's recommendation
-                info!("💰 AMM V4 MEV tip: {} lamports ({:.4} SOL)", jito_tip_lamports, jito_tip_lamports as f64 / 1e9);
+                info!(
+                    "💰 AMM V4 MEV tip: {} lamports ({:.4} SOL)",
+                    jito_tip_lamports,
+                    jito_tip_lamports as f64 / 1e9
+                );
 
                 // ============================================
                 // STEP 4: SUBMIT REAL SANDWICH BUNDLE TO JITO
@@ -2723,8 +2758,15 @@ async fn execute_sandwich_opportunity(
                 info!("   Bundle: [FRONTRUN → VICTIM → BACKRUN → TIP] (4 txs)");
                 info!("   Pool: {}", &pool_address_str[..8]);
                 info!("   Position: {:.4} SOL", position_size_sol);
-                info!("   Expected profit: {:.6} SOL ({:.2}%)", estimated_net_profit, expected_profit_pct * 100.0);
-                info!("   Victim tx bytes: {} bytes", opportunity.victim_tx_bytes.as_ref().map_or(0, |b| b.len()));
+                info!(
+                    "   Expected profit: {:.6} SOL ({:.2}%)",
+                    estimated_net_profit,
+                    expected_profit_pct * 100.0
+                );
+                info!(
+                    "   Victim tx bytes: {} bytes",
+                    opportunity.victim_tx_bytes.as_ref().map_or(0, |b| b.len())
+                );
                 info!("   Victim blockhash: {:?}", opportunity.victim_blockhash);
 
                 let bundle_result = jito_client
@@ -2781,8 +2823,10 @@ async fn execute_sandwich_opportunity(
                 info!("   Token A (SOL): {}", pool_state.token_mint_a);
                 info!("   Token B (Meme): {}", pool_state.token_mint_b);
                 info!("   Sqrt Price: {}", pool_state.sqrt_price_x64);
-                info!("   🎯 tick_current: {}, tick_spacing: {}, amm_config: {}",
-                    pool_state.tick_current, pool_state.tick_spacing, pool_state.amm_config);
+                info!(
+                    "   🎯 tick_current: {}, tick_spacing: {}, amm_config: {}",
+                    pool_state.tick_current, pool_state.tick_spacing, pool_state.amm_config
+                );
 
                 // Compute ATA addresses (no creation yet - will be included in bundle for atomicity)
                 // This prevents fee waste: if bundle fails, ATA creation also fails
@@ -2790,20 +2834,24 @@ async fn execute_sandwich_opportunity(
                     crate::token_account_manager::TokenAccountManager::new(rpc_url.clone());
 
                 // Get correct token programs for each mint
-                let token_a_program = token_account_manager.get_token_program_for_mint(&pool_state.token_mint_a);
-                let token_b_program = token_account_manager.get_token_program_for_mint(&pool_state.token_mint_b);
+                let token_a_program =
+                    token_account_manager.get_token_program_for_mint(&pool_state.token_mint_a);
+                let token_b_program =
+                    token_account_manager.get_token_program_for_mint(&pool_state.token_mint_b);
 
                 // Compute ATA addresses (deterministic - doesn't require RPC)
-                let token_a_ata = crate::token_account_manager::TokenAccountManager::get_ata_address_with_program(
-                    &trading_keypair.pubkey(),
-                    &pool_state.token_mint_a,
-                    &token_a_program,
-                );
-                let token_b_ata = crate::token_account_manager::TokenAccountManager::get_ata_address_with_program(
-                    &trading_keypair.pubkey(),
-                    &pool_state.token_mint_b,
-                    &token_b_program,
-                );
+                let token_a_ata =
+                    crate::token_account_manager::TokenAccountManager::get_ata_address_with_program(
+                        &trading_keypair.pubkey(),
+                        &pool_state.token_mint_a,
+                        &token_a_program,
+                    );
+                let token_b_ata =
+                    crate::token_account_manager::TokenAccountManager::get_ata_address_with_program(
+                        &trading_keypair.pubkey(),
+                        &pool_state.token_mint_b,
+                        &token_b_program,
+                    );
 
                 // Build idempotent ATA creation instructions (will succeed even if ATA exists)
                 // These will be included in the frontrun_tx for atomicity
@@ -2827,7 +2875,10 @@ async fn execute_sandwich_opportunity(
                 // ============================================
                 // For CLMM pools with tick_spacing=1, tick arrays may not be initialized
                 // at all positions. We must verify before attempting swap.
-                info!("🔍 Verifying tick_array exists for tick_current={}...", pool_state.tick_current);
+                info!(
+                    "🔍 Verifying tick_array exists for tick_current={}...",
+                    pool_state.tick_current
+                );
                 match crate::raydium_clmm_swap::verify_tick_array_exists(
                     &rpc_client,
                     &pool_state.pool_id,
@@ -2839,8 +2890,10 @@ async fn execute_sandwich_opportunity(
                     }
                     Err(e) => {
                         warn!("⚠️ CLMM tick_array not initialized: {}", e);
-                        warn!("   Skipping pool {} (tick_spacing={}, tick={})",
-                            pool_state.pool_id, pool_state.tick_spacing, pool_state.tick_current);
+                        warn!(
+                            "   Skipping pool {} (tick_spacing={}, tick={})",
+                            pool_state.pool_id, pool_state.tick_spacing, pool_state.tick_current
+                        );
                         let _ = db_tracker.log_skipped(
                             opportunity,
                             &format!("tick_array not initialized: {}", e),
@@ -2875,11 +2928,17 @@ async fn execute_sandwich_opportunity(
                 let min_meme_out = expected_meme_tokens * (10000 - slippage_bps) / 10000;
 
                 info!("📊 Sandwich calculations:");
-                info!("   Position: {} lamports ({:.4} SOL)", position_lamports, position_size_sol);
+                info!(
+                    "   Position: {} lamports ({:.4} SOL)",
+                    position_lamports, position_size_sol
+                );
                 info!("   sqrt_price_x64: {}", pool_state.sqrt_price_x64);
                 info!("   Price B/A: {:.6}", price_b_per_a);
                 info!("   Expected meme tokens: {}", expected_meme_tokens);
-                info!("   Min meme out (with {}bps slippage): {}", slippage_bps, min_meme_out);
+                info!(
+                    "   Min meme out (with {}bps slippage): {}",
+                    slippage_bps, min_meme_out
+                );
 
                 // ============================================
                 // STEP 1: BUILD FRONTRUN INSTRUCTION (BUY MEME)
@@ -2890,12 +2949,12 @@ async fn execute_sandwich_opportunity(
                 info!("🔨 Building FRONTRUN instruction (buy meme with SOL)...");
                 let frontrun_ix = match crate::raydium_clmm_swap::build_clmm_frontrun_instruction(
                     pool_state,
-                    &token_a_ata,  // Source: SOL (what we spend)
-                    &token_b_ata,  // Dest: meme token (what we receive)
+                    &token_a_ata, // Source: SOL (what we spend)
+                    &token_b_ata, // Dest: meme token (what we receive)
                     &trading_keypair.pubkey(),
-                    position_lamports,  // Amount of SOL to spend
-                    min_meme_out,       // Minimum meme tokens to receive
-                    true, // is_base_input=true: A→B swap (spend token A for token B)
+                    position_lamports, // Amount of SOL to spend
+                    min_meme_out,      // Minimum meme tokens to receive
+                    true,              // is_base_input=true: A→B swap (spend token A for token B)
                 ) {
                     Ok(ix) => {
                         info!("✅ FRONTRUN instruction built successfully");
@@ -2922,19 +2981,23 @@ async fn execute_sandwich_opportunity(
                 // Calculate expected SOL return (should be > position_lamports for profit)
                 // Account for price impact from victim's buy (estimated 3-10% pump)
                 let expected_profit_pct = estimated_net_profit / position_size_sol;
-                let min_sol_back = (position_lamports as f64 * (1.0 + expected_profit_pct * 0.5)) as u64; // 50% of expected profit as minimum
+                let min_sol_back =
+                    (position_lamports as f64 * (1.0 + expected_profit_pct * 0.5)) as u64; // 50% of expected profit as minimum
 
                 info!("🔨 Building BACKRUN instruction (sell meme for SOL)...");
-                info!("   Selling: {} meme tokens (expected from frontrun)", expected_meme_tokens);
+                info!(
+                    "   Selling: {} meme tokens (expected from frontrun)",
+                    expected_meme_tokens
+                );
                 info!("   Min SOL back: {} lamports", min_sol_back);
 
                 let backrun_ix = match crate::raydium_clmm_swap::build_clmm_backrun_instruction(
                     pool_state,
-                    &token_b_ata,  // Source: meme token (what we sell)
-                    &token_a_ata,  // Dest: SOL (what we receive)
+                    &token_b_ata, // Source: meme token (what we sell)
+                    &token_a_ata, // Dest: SOL (what we receive)
                     &trading_keypair.pubkey(),
-                    expected_meme_tokens,  // Amount of meme tokens to sell (from frontrun)
-                    min_sol_back,          // Minimum SOL to receive
+                    expected_meme_tokens, // Amount of meme tokens to sell (from frontrun)
+                    min_sol_back,         // Minimum SOL to receive
                     false, // is_base_input=false: B→A swap (sell token B for token A)
                 ) {
                     Ok(ix) => {
@@ -2959,11 +3022,16 @@ async fn execute_sandwich_opportunity(
                 // CRITICAL: Use victim's blockhash for ALL bundle transactions
                 let blockhash_to_use = match &opportunity.victim_blockhash {
                     Some(bh) => {
-                        info!("✅ Using VICTIM's blockhash: {} (CRITICAL for bundle success)", bh);
+                        info!(
+                            "✅ Using VICTIM's blockhash: {} (CRITICAL for bundle success)",
+                            bh
+                        );
                         *bh
                     }
                     None => {
-                        warn!("⚠️  No victim blockhash - fetching fresh (may cause bundle failure)");
+                        warn!(
+                            "⚠️  No victim blockhash - fetching fresh (may cause bundle failure)"
+                        );
                         match rpc_client.get_latest_blockhash() {
                             Ok(blockhash) => blockhash,
                             Err(e) => {
@@ -2997,10 +3065,16 @@ async fn execute_sandwich_opportunity(
 
                 // Grok recommended: 0.005 SOL minimum tip for MEV bundles
                 let jito_tip_lamports = 5_000_000u64; // 0.005 SOL - Grok's recommendation
-                info!("💰 CLMM MEV tip: {} lamports ({:.4} SOL)", jito_tip_lamports, jito_tip_lamports as f64 / 1_000_000_000.0);
+                info!(
+                    "💰 CLMM MEV tip: {} lamports ({:.4} SOL)",
+                    jito_tip_lamports,
+                    jito_tip_lamports as f64 / 1_000_000_000.0
+                );
 
                 // Optional simulation before JITO submission
-                let enable_sim = std::env::var("ENABLE_SIMULATION").map(|v| v == "true").unwrap_or(false);
+                let enable_sim = std::env::var("ENABLE_SIMULATION")
+                    .map(|v| v == "true")
+                    .unwrap_or(false);
                 if enable_sim {
                     info!("🔍 Simulating FRONTRUN transaction...");
                     let sim_config = solana_client::rpc_config::RpcSimulateTransactionConfig {
@@ -3012,7 +3086,9 @@ async fn execute_sandwich_opportunity(
                         min_context_slot: None,
                         inner_instructions: false,
                     };
-                    match rpc_client.simulate_transaction_with_config(&frontrun_tx, sim_config.clone()) {
+                    match rpc_client
+                        .simulate_transaction_with_config(&frontrun_tx, sim_config.clone())
+                    {
                         Ok(sim_result) => {
                             if let Some(err) = sim_result.value.err {
                                 warn!("❌ FRONTRUN simulation FAILED: {:?}", err);
@@ -3039,7 +3115,10 @@ async fn execute_sandwich_opportunity(
                 // ============================================
                 info!("🚀 Submitting Raydium CLMM SANDWICH bundle to JITO...");
                 info!("   Bundle: [FRONTRUN → VICTIM → BACKRUN → TIP] (4 txs)");
-                info!("   Victim tx bytes: {} bytes", opportunity.victim_tx_bytes.as_ref().map_or(0, |b| b.len()));
+                info!(
+                    "   Victim tx bytes: {} bytes",
+                    opportunity.victim_tx_bytes.as_ref().map_or(0, |b| b.len())
+                );
                 info!("   Victim blockhash: {:?}", opportunity.victim_blockhash);
                 info!("   Tip: {} lamports", jito_tip_lamports);
 
@@ -3096,20 +3175,24 @@ async fn execute_sandwich_opportunity(
                     crate::token_account_manager::TokenAccountManager::new(rpc_url.clone());
 
                 // Get correct token programs for each mint
-                let token_0_program = token_account_manager.get_token_program_for_mint(&pool_state.token_0_mint);
-                let token_1_program = token_account_manager.get_token_program_for_mint(&pool_state.token_1_mint);
+                let token_0_program =
+                    token_account_manager.get_token_program_for_mint(&pool_state.token_0_mint);
+                let token_1_program =
+                    token_account_manager.get_token_program_for_mint(&pool_state.token_1_mint);
 
                 // Compute ATA addresses (deterministic - doesn't require RPC)
-                let token_0_ata = crate::token_account_manager::TokenAccountManager::get_ata_address_with_program(
-                    &trading_keypair.pubkey(),
-                    &pool_state.token_0_mint,
-                    &token_0_program,
-                );
-                let token_1_ata = crate::token_account_manager::TokenAccountManager::get_ata_address_with_program(
-                    &trading_keypair.pubkey(),
-                    &pool_state.token_1_mint,
-                    &token_1_program,
-                );
+                let token_0_ata =
+                    crate::token_account_manager::TokenAccountManager::get_ata_address_with_program(
+                        &trading_keypair.pubkey(),
+                        &pool_state.token_0_mint,
+                        &token_0_program,
+                    );
+                let token_1_ata =
+                    crate::token_account_manager::TokenAccountManager::get_ata_address_with_program(
+                        &trading_keypair.pubkey(),
+                        &pool_state.token_1_mint,
+                        &token_1_program,
+                    );
 
                 // Build idempotent ATA creation instructions
                 let token_0_ata_ix = crate::token_account_manager::TokenAccountManager::build_create_ata_instruction_with_program(
@@ -3122,7 +3205,10 @@ async fn execute_sandwich_opportunity(
                     &pool_state.token_1_mint,
                     &token_1_program,
                 );
-                info!("📝 CPMM ATAs computed: t0={}, t1={}", token_0_ata, token_1_ata);
+                info!(
+                    "📝 CPMM ATAs computed: t0={}, t1={}",
+                    token_0_ata, token_1_ata
+                );
 
                 // ============================================
                 // 🥪 FULL SANDWICH: FRONTRUN + BACKRUN
@@ -3133,15 +3219,18 @@ async fn execute_sandwich_opportunity(
                 let min_meme_out = estimated_meme_tokens * (10000 - slippage_bps) / 10000;
 
                 info!("📊 CPMM Sandwich calculations:");
-                info!("   Position: {} lamports ({:.4} SOL)", position_lamports, position_size_sol);
+                info!(
+                    "   Position: {} lamports ({:.4} SOL)",
+                    position_lamports, position_size_sol
+                );
                 info!("   Expected meme tokens: ~{}", estimated_meme_tokens);
 
                 // STEP 1: BUILD FRONTRUN (buy meme with SOL)
                 info!("🔨 Building FRONTRUN instruction (buy meme with SOL)...");
                 let frontrun_ix = match crate::raydium_cpmm_swap::build_cpmm_frontrun_instruction(
                     pool_state,
-                    &token_0_ata,  // Source: SOL
-                    &token_1_ata,  // Dest: meme token
+                    &token_0_ata, // Source: SOL
+                    &token_1_ata, // Dest: meme token
                     &trading_keypair.pubkey(),
                     position_lamports,
                     min_meme_out,
@@ -3162,13 +3251,14 @@ async fn execute_sandwich_opportunity(
 
                 // STEP 2: BUILD BACKRUN (sell meme for SOL)
                 let expected_profit_pct = estimated_net_profit / position_size_sol;
-                let min_sol_back = (position_lamports as f64 * (1.0 + expected_profit_pct * 0.5)) as u64;
+                let min_sol_back =
+                    (position_lamports as f64 * (1.0 + expected_profit_pct * 0.5)) as u64;
 
                 info!("🔨 Building BACKRUN instruction (sell meme for SOL)...");
                 let backrun_ix = match crate::raydium_cpmm_swap::build_cpmm_backrun_instruction(
                     pool_state,
-                    &token_1_ata,  // Source: meme token
-                    &token_0_ata,  // Dest: SOL
+                    &token_1_ata, // Source: meme token
+                    &token_0_ata, // Dest: SOL
                     &trading_keypair.pubkey(),
                     estimated_meme_tokens,
                     min_sol_back,
@@ -3191,11 +3281,16 @@ async fn execute_sandwich_opportunity(
                 // CRITICAL: Use victim's blockhash for ALL bundle transactions
                 let blockhash_to_use = match &opportunity.victim_blockhash {
                     Some(bh) => {
-                        info!("✅ Using VICTIM's blockhash: {} (CRITICAL for bundle success)", bh);
+                        info!(
+                            "✅ Using VICTIM's blockhash: {} (CRITICAL for bundle success)",
+                            bh
+                        );
                         *bh
                     }
                     None => {
-                        warn!("⚠️  No victim blockhash - fetching fresh (may cause bundle failure)");
+                        warn!(
+                            "⚠️  No victim blockhash - fetching fresh (may cause bundle failure)"
+                        );
                         match rpc_client.get_latest_blockhash() {
                             Ok(blockhash) => blockhash,
                             Err(e) => {
@@ -3211,7 +3306,7 @@ async fn execute_sandwich_opportunity(
                 };
 
                 let frontrun_tx = solana_sdk::transaction::Transaction::new_signed_with_payer(
-                    &[token_0_ata_ix, token_1_ata_ix, frontrun_ix],  // ATA creation + frontrun
+                    &[token_0_ata_ix, token_1_ata_ix, frontrun_ix], // ATA creation + frontrun
                     Some(&trading_keypair.pubkey()),
                     &[trading_keypair],
                     blockhash_to_use,
@@ -3228,12 +3323,19 @@ async fn execute_sandwich_opportunity(
 
                 // Grok recommended: 0.005 SOL minimum tip for MEV bundles
                 let jito_tip_lamports = 5_000_000u64;
-                info!("💰 CPMM MEV tip: {} lamports ({:.4} SOL)", jito_tip_lamports, jito_tip_lamports as f64 / 1e9);
+                info!(
+                    "💰 CPMM MEV tip: {} lamports ({:.4} SOL)",
+                    jito_tip_lamports,
+                    jito_tip_lamports as f64 / 1e9
+                );
 
                 // STEP 4: SUBMIT REAL SANDWICH BUNDLE (with victim tx)
                 info!("🚀 Submitting CPMM SANDWICH bundle to JITO...");
                 info!("   Bundle: [FRONTRUN → VICTIM → BACKRUN → TIP] (4 txs)");
-                info!("   Victim tx bytes: {} bytes", opportunity.victim_tx_bytes.as_ref().map_or(0, |b| b.len()));
+                info!(
+                    "   Victim tx bytes: {} bytes",
+                    opportunity.victim_tx_bytes.as_ref().map_or(0, |b| b.len())
+                );
                 let bundle_result = jito_client
                     .submit_sandwich_bundle(
                         frontrun_tx,
@@ -3284,20 +3386,24 @@ async fn execute_sandwich_opportunity(
                     crate::token_account_manager::TokenAccountManager::new(rpc_url.clone());
 
                 // Get correct token programs for each mint
-                let token_a_program = token_account_manager.get_token_program_for_mint(&pool_state.token_mint_a);
-                let token_b_program = token_account_manager.get_token_program_for_mint(&pool_state.token_mint_b);
+                let token_a_program =
+                    token_account_manager.get_token_program_for_mint(&pool_state.token_mint_a);
+                let token_b_program =
+                    token_account_manager.get_token_program_for_mint(&pool_state.token_mint_b);
 
                 // Compute ATA addresses (deterministic - doesn't require RPC)
-                let token_a_ata = crate::token_account_manager::TokenAccountManager::get_ata_address_with_program(
-                    &trading_keypair.pubkey(),
-                    &pool_state.token_mint_a,
-                    &token_a_program,
-                );
-                let token_b_ata = crate::token_account_manager::TokenAccountManager::get_ata_address_with_program(
-                    &trading_keypair.pubkey(),
-                    &pool_state.token_mint_b,
-                    &token_b_program,
-                );
+                let token_a_ata =
+                    crate::token_account_manager::TokenAccountManager::get_ata_address_with_program(
+                        &trading_keypair.pubkey(),
+                        &pool_state.token_mint_a,
+                        &token_a_program,
+                    );
+                let token_b_ata =
+                    crate::token_account_manager::TokenAccountManager::get_ata_address_with_program(
+                        &trading_keypair.pubkey(),
+                        &pool_state.token_mint_b,
+                        &token_b_program,
+                    );
 
                 // Build idempotent ATA creation instructions
                 let token_a_ata_ix = crate::token_account_manager::TokenAccountManager::build_create_ata_instruction_with_program(
@@ -3310,7 +3416,10 @@ async fn execute_sandwich_opportunity(
                     &pool_state.token_mint_b,
                     &token_b_program,
                 );
-                info!("📝 Orca ATAs computed: a={}, b={}", token_a_ata, token_b_ata);
+                info!(
+                    "📝 Orca ATAs computed: a={}, b={}",
+                    token_a_ata, token_b_ata
+                );
 
                 // ============================================
                 // 🥪 FULL SANDWICH: FRONTRUN + BACKRUN
@@ -3321,15 +3430,18 @@ async fn execute_sandwich_opportunity(
                 let min_meme_out = estimated_meme_tokens * (10000 - slippage_bps) / 10000;
 
                 info!("📊 Orca Sandwich calculations:");
-                info!("   Position: {} lamports ({:.4} SOL)", position_lamports, position_size_sol);
+                info!(
+                    "   Position: {} lamports ({:.4} SOL)",
+                    position_lamports, position_size_sol
+                );
 
                 // STEP 1: BUILD FRONTRUN (buy meme with SOL: A→B)
                 info!("🔨 Building FRONTRUN instruction (buy meme with SOL)...");
                 let frontrun_ix =
                     match crate::orca_whirlpool_swap::build_whirlpool_frontrun_instruction(
                         pool_state,
-                        &token_a_ata,  // Source: SOL
-                        &token_b_ata,  // Dest: meme
+                        &token_a_ata, // Source: SOL
+                        &token_b_ata, // Dest: meme
                         &trading_keypair.pubkey(),
                         position_lamports,
                         min_meme_out,
@@ -3351,14 +3463,15 @@ async fn execute_sandwich_opportunity(
 
                 // STEP 2: BUILD BACKRUN (sell meme for SOL: B→A)
                 let expected_profit_pct = estimated_net_profit / position_size_sol;
-                let min_sol_back = (position_lamports as f64 * (1.0 + expected_profit_pct * 0.5)) as u64;
+                let min_sol_back =
+                    (position_lamports as f64 * (1.0 + expected_profit_pct * 0.5)) as u64;
 
                 info!("🔨 Building BACKRUN instruction (sell meme for SOL)...");
                 let backrun_ix =
                     match crate::orca_whirlpool_swap::build_whirlpool_backrun_instruction(
                         pool_state,
-                        &token_b_ata,  // Source: meme
-                        &token_a_ata,  // Dest: SOL
+                        &token_b_ata, // Source: meme
+                        &token_a_ata, // Dest: SOL
                         &trading_keypair.pubkey(),
                         estimated_meme_tokens,
                         min_sol_back,
@@ -3382,11 +3495,16 @@ async fn execute_sandwich_opportunity(
                 // CRITICAL: Use victim's blockhash for ALL bundle transactions
                 let blockhash_to_use = match &opportunity.victim_blockhash {
                     Some(bh) => {
-                        info!("✅ Using VICTIM's blockhash: {} (CRITICAL for bundle success)", bh);
+                        info!(
+                            "✅ Using VICTIM's blockhash: {} (CRITICAL for bundle success)",
+                            bh
+                        );
                         *bh
                     }
                     None => {
-                        warn!("⚠️  No victim blockhash - fetching fresh (may cause bundle failure)");
+                        warn!(
+                            "⚠️  No victim blockhash - fetching fresh (may cause bundle failure)"
+                        );
                         match rpc_client.get_latest_blockhash() {
                             Ok(blockhash) => blockhash,
                             Err(e) => {
@@ -3418,12 +3536,19 @@ async fn execute_sandwich_opportunity(
 
                 // Grok recommended: 0.005 SOL minimum tip for MEV bundles
                 let jito_tip_lamports = 5_000_000u64;
-                info!("💰 Orca MEV tip: {} lamports ({:.4} SOL)", jito_tip_lamports, jito_tip_lamports as f64 / 1e9);
+                info!(
+                    "💰 Orca MEV tip: {} lamports ({:.4} SOL)",
+                    jito_tip_lamports,
+                    jito_tip_lamports as f64 / 1e9
+                );
 
                 // STEP 4: SUBMIT REAL SANDWICH BUNDLE (with victim tx)
                 info!("🚀 Submitting Orca SANDWICH bundle to JITO...");
                 info!("   Bundle: [FRONTRUN → VICTIM → BACKRUN → TIP] (4 txs)");
-                info!("   Victim tx bytes: {} bytes", opportunity.victim_tx_bytes.as_ref().map_or(0, |b| b.len()));
+                info!(
+                    "   Victim tx bytes: {} bytes",
+                    opportunity.victim_tx_bytes.as_ref().map_or(0, |b| b.len())
+                );
                 let bundle_result = jito_client
                     .submit_sandwich_bundle(
                         frontrun_tx,
@@ -3473,20 +3598,24 @@ async fn execute_sandwich_opportunity(
                     crate::token_account_manager::TokenAccountManager::new(rpc_url.clone());
 
                 // Get correct token programs for each mint
-                let token_x_program = token_account_manager.get_token_program_for_mint(&pool_state.token_x_mint);
-                let token_y_program = token_account_manager.get_token_program_for_mint(&pool_state.token_y_mint);
+                let token_x_program =
+                    token_account_manager.get_token_program_for_mint(&pool_state.token_x_mint);
+                let token_y_program =
+                    token_account_manager.get_token_program_for_mint(&pool_state.token_y_mint);
 
                 // Compute ATA addresses (deterministic - doesn't require RPC)
-                let token_x_ata = crate::token_account_manager::TokenAccountManager::get_ata_address_with_program(
-                    &trading_keypair.pubkey(),
-                    &pool_state.token_x_mint,
-                    &token_x_program,
-                );
-                let token_y_ata = crate::token_account_manager::TokenAccountManager::get_ata_address_with_program(
-                    &trading_keypair.pubkey(),
-                    &pool_state.token_y_mint,
-                    &token_y_program,
-                );
+                let token_x_ata =
+                    crate::token_account_manager::TokenAccountManager::get_ata_address_with_program(
+                        &trading_keypair.pubkey(),
+                        &pool_state.token_x_mint,
+                        &token_x_program,
+                    );
+                let token_y_ata =
+                    crate::token_account_manager::TokenAccountManager::get_ata_address_with_program(
+                        &trading_keypair.pubkey(),
+                        &pool_state.token_y_mint,
+                        &token_y_program,
+                    );
 
                 // Build idempotent ATA creation instructions
                 let token_x_ata_ix = crate::token_account_manager::TokenAccountManager::build_create_ata_instruction_with_program(
@@ -3499,7 +3628,10 @@ async fn execute_sandwich_opportunity(
                     &pool_state.token_y_mint,
                     &token_y_program,
                 );
-                info!("📝 Meteora ATAs computed (will create in bundle): x={}, y={}", token_x_ata, token_y_ata);
+                info!(
+                    "📝 Meteora ATAs computed (will create in bundle): x={}, y={}",
+                    token_x_ata, token_y_ata
+                );
 
                 // ========================================================================
                 // METEORA DLMM FULL SANDWICH - FRONTRUN + BACKRUN
@@ -3520,11 +3652,11 @@ async fn execute_sandwich_opportunity(
                 info!("🔷 Meteora DLMM SANDWICH - Building FRONTRUN (buy meme with SOL)");
                 let frontrun_ix = match crate::meteora_dlmm_swap::build_dlmm_frontrun_instruction(
                     pool_state,
-                    &token_y_ata,   // Source: SOL (what we spend)
-                    &token_x_ata,   // Dest: meme token (what we receive)
+                    &token_y_ata, // Source: SOL (what we spend)
+                    &token_x_ata, // Dest: meme token (what we receive)
                     &trading_keypair.pubkey(),
-                    position_lamports,  // Amount of SOL to spend
-                    min_meme_out,       // Minimum meme tokens to receive
+                    position_lamports, // Amount of SOL to spend
+                    min_meme_out,      // Minimum meme tokens to receive
                 ) {
                     Ok(ix) => ix,
                     Err(e) => {
@@ -3542,16 +3674,17 @@ async fn execute_sandwich_opportunity(
                 // We estimate we'll get roughly the same amount of meme tokens as lamports spent (rough 1:1)
                 let estimated_meme_tokens = position_lamports; // Rough estimate
                 let expected_profit_pct = estimated_net_profit / position_size_sol;
-                let min_sol_back = (position_lamports as f64 * (1.0 + expected_profit_pct - 0.015)) as u64;
+                let min_sol_back =
+                    (position_lamports as f64 * (1.0 + expected_profit_pct - 0.015)) as u64;
 
                 info!("🔶 Meteora DLMM SANDWICH - Building BACKRUN (sell meme for SOL)");
                 let backrun_ix = match crate::meteora_dlmm_swap::build_dlmm_backrun_instruction(
                     pool_state,
-                    &token_x_ata,   // Source: meme token (what we sell)
-                    &token_y_ata,   // Dest: SOL (what we receive)
+                    &token_x_ata, // Source: meme token (what we sell)
+                    &token_y_ata, // Dest: SOL (what we receive)
                     &trading_keypair.pubkey(),
-                    estimated_meme_tokens,  // Amount of meme to sell
-                    min_sol_back,           // Minimum SOL to receive back
+                    estimated_meme_tokens, // Amount of meme to sell
+                    min_sol_back,          // Minimum SOL to receive back
                 ) {
                     Ok(ix) => ix,
                     Err(e) => {
@@ -3567,11 +3700,16 @@ async fn execute_sandwich_opportunity(
                 // CRITICAL: Use victim's blockhash for ALL bundle transactions
                 let blockhash_to_use = match &opportunity.victim_blockhash {
                     Some(bh) => {
-                        info!("✅ Using VICTIM's blockhash: {} (CRITICAL for bundle success)", bh);
+                        info!(
+                            "✅ Using VICTIM's blockhash: {} (CRITICAL for bundle success)",
+                            bh
+                        );
                         *bh
                     }
                     None => {
-                        warn!("⚠️  No victim blockhash - fetching fresh (may cause bundle failure)");
+                        warn!(
+                            "⚠️  No victim blockhash - fetching fresh (may cause bundle failure)"
+                        );
                         match rpc_client.get_latest_blockhash() {
                             Ok(blockhash) => blockhash,
                             Err(e) => {
@@ -3587,7 +3725,7 @@ async fn execute_sandwich_opportunity(
 
                 // FRONTRUN TX: ATA creation (idempotent) + frontrun swap
                 let frontrun_tx = solana_sdk::transaction::Transaction::new_signed_with_payer(
-                    &[token_x_ata_ix, token_y_ata_ix, frontrun_ix],  // ATAs + frontrun
+                    &[token_x_ata_ix, token_y_ata_ix, frontrun_ix], // ATAs + frontrun
                     Some(&trading_keypair.pubkey()),
                     &[trading_keypair],
                     blockhash_to_use,
@@ -3602,15 +3740,28 @@ async fn execute_sandwich_opportunity(
                 );
 
                 info!("✅ Meteora DLMM SANDWICH built:");
-                info!("   TX1 (frontrun): 2 ATA creates + buy meme with {} SOL", position_size_sol);
-                info!("   TX2 (backrun): sell meme for SOL (min {} lamports back)", min_sol_back);
+                info!(
+                    "   TX1 (frontrun): 2 ATA creates + buy meme with {} SOL",
+                    position_size_sol
+                );
+                info!(
+                    "   TX2 (backrun): sell meme for SOL (min {} lamports back)",
+                    min_sol_back
+                );
 
                 // Grok recommended: 0.005 SOL minimum tip for MEV bundles
                 let jito_tip_lamports = 5_000_000u64; // 0.005 SOL - competitive for MEV
-                info!("💰 Meteora MEV tip: {} lamports ({:.4} SOL)", jito_tip_lamports, jito_tip_lamports as f64 / 1_000_000_000.0);
+                info!(
+                    "💰 Meteora MEV tip: {} lamports ({:.4} SOL)",
+                    jito_tip_lamports,
+                    jito_tip_lamports as f64 / 1_000_000_000.0
+                );
                 info!("🚀 Submitting Meteora DLMM FULL SANDWICH to JITO (frontrun + victim + backrun)...");
                 info!("   Bundle: [FRONTRUN → VICTIM → BACKRUN → TIP] (4 txs)");
-                info!("   Victim tx bytes: {} bytes", opportunity.victim_tx_bytes.as_ref().map_or(0, |b| b.len()));
+                info!(
+                    "   Victim tx bytes: {} bytes",
+                    opportunity.victim_tx_bytes.as_ref().map_or(0, |b| b.len())
+                );
 
                 // Submit REAL sandwich bundle with victim tx included
                 let bundle_result = jito_client
@@ -3625,7 +3776,10 @@ async fn execute_sandwich_opportunity(
 
                 match bundle_result {
                     Ok(bundle_id) => {
-                        info!("✅ Meteora DLMM SANDWICH bundle submitted! ID: {}", bundle_id);
+                        info!(
+                            "✅ Meteora DLMM SANDWICH bundle submitted! ID: {}",
+                            bundle_id
+                        );
                         tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
                         let _ = db_tracker.log_executed(
                             &opportunity.signature,
@@ -3660,30 +3814,34 @@ async fn execute_sandwich_opportunity(
 
                 // Helper function to resolve actual mint from a token account address
                 // The sandwich detector passes user token accounts, not actual mint addresses
-                let resolve_mint_from_token_account = |token_account_str: &str| -> Option<solana_sdk::pubkey::Pubkey> {
-                    let token_account_pubkey = solana_sdk::pubkey::Pubkey::from_str(token_account_str).ok()?;
+                let resolve_mint_from_token_account =
+                    |token_account_str: &str| -> Option<solana_sdk::pubkey::Pubkey> {
+                        let token_account_pubkey =
+                            solana_sdk::pubkey::Pubkey::from_str(token_account_str).ok()?;
 
-                    // Query the token account to get its mint
-                    match rpc_client.get_account(&token_account_pubkey) {
-                        Ok(account) => {
-                            // Token account data: first 32 bytes after discriminator is the mint
-                            // Standard Token Program layout: [discriminator(8) or mint(32), owner(32), amount(8), ...]
-                            // Simplified: first 32 bytes is mint in SPL Token
-                            if account.data.len() >= 32 {
-                                let mint_bytes: [u8; 32] = account.data[0..32].try_into().ok()?;
-                                let mint = solana_sdk::pubkey::Pubkey::new_from_array(mint_bytes);
+                        // Query the token account to get its mint
+                        match rpc_client.get_account(&token_account_pubkey) {
+                            Ok(account) => {
+                                // Token account data: first 32 bytes after discriminator is the mint
+                                // Standard Token Program layout: [discriminator(8) or mint(32), owner(32), amount(8), ...]
+                                // Simplified: first 32 bytes is mint in SPL Token
+                                if account.data.len() >= 32 {
+                                    let mint_bytes: [u8; 32] =
+                                        account.data[0..32].try_into().ok()?;
+                                    let mint =
+                                        solana_sdk::pubkey::Pubkey::new_from_array(mint_bytes);
 
-                                // Validate it's not all zeros
-                                if mint != solana_sdk::pubkey::Pubkey::default() {
-                                    info!("   Resolved mint from token account: {}", mint);
-                                    return Some(mint);
+                                    // Validate it's not all zeros
+                                    if mint != solana_sdk::pubkey::Pubkey::default() {
+                                        info!("   Resolved mint from token account: {}", mint);
+                                        return Some(mint);
+                                    }
                                 }
+                                None
                             }
-                            None
+                            Err(_) => None,
                         }
-                        Err(_) => None
-                    }
-                };
+                    };
 
                 // Get token mint - first try to resolve from token account, then fall back to direct use
                 let token_mint = if let Some(ref output_mint_str) = opportunity.output_mint {
@@ -3709,7 +3867,9 @@ async fn execute_sandwich_opportunity(
                     // Try input mint
                     if let Some(resolved_mint) = resolve_mint_from_token_account(input_mint_str) {
                         // Skip if it's WSOL
-                        if resolved_mint.to_string() == "So11111111111111111111111111111111111111112" {
+                        if resolved_mint.to_string()
+                            == "So11111111111111111111111111111111111111112"
+                        {
                             warn!("⚠️  Resolved to WSOL, need non-SOL token mint");
                             return Ok(false);
                         }
@@ -3718,7 +3878,8 @@ async fn execute_sandwich_opportunity(
                     } else {
                         match solana_sdk::pubkey::Pubkey::from_str(input_mint_str) {
                             Ok(mint) => {
-                                if mint.to_string() == "So11111111111111111111111111111111111111112" {
+                                if mint.to_string() == "So11111111111111111111111111111111111111112"
+                                {
                                     warn!("⚠️  Only have WSOL mint, need token mint");
                                     return Ok(false);
                                 }
@@ -3751,16 +3912,18 @@ async fn execute_sandwich_opportunity(
                 let wsol_program = spl_token::id(); // WSOL is always standard Token Program
 
                 // Compute ATA addresses (deterministic - doesn't require RPC)
-                let token_ata = crate::token_account_manager::TokenAccountManager::get_ata_address_with_program(
-                    &trading_keypair.pubkey(),
-                    &token_mint,
-                    &token_program,
-                );
-                let wsol_ata = crate::token_account_manager::TokenAccountManager::get_ata_address_with_program(
-                    &trading_keypair.pubkey(),
-                    &wsol_mint,
-                    &wsol_program,
-                );
+                let token_ata =
+                    crate::token_account_manager::TokenAccountManager::get_ata_address_with_program(
+                        &trading_keypair.pubkey(),
+                        &token_mint,
+                        &token_program,
+                    );
+                let wsol_ata =
+                    crate::token_account_manager::TokenAccountManager::get_ata_address_with_program(
+                        &trading_keypair.pubkey(),
+                        &wsol_mint,
+                        &wsol_program,
+                    );
 
                 // Build idempotent ATA creation instructions (will succeed even if ATA exists)
                 let token_ata_ix = crate::token_account_manager::TokenAccountManager::build_create_ata_instruction_with_program(
@@ -3773,7 +3936,10 @@ async fn execute_sandwich_opportunity(
                     &wsol_mint,
                     &wsol_program,
                 );
-                info!("📝 PumpSwap ATAs computed (will create in bundle): token={}, wsol={}", token_ata, wsol_ata);
+                info!(
+                    "📝 PumpSwap ATAs computed (will create in bundle): token={}, wsol={}",
+                    token_ata, wsol_ata
+                );
 
                 let position_lamports = (position_size_sol * 1_000_000_000.0) as u64;
                 let slippage = 0.02; // 2% slippage for sandwich
@@ -3827,17 +3993,28 @@ async fn execute_sandwich_opportunity(
                     }
                 };
 
-                info!("   Frontrun: {} lamports SOL → {} min tokens", position_lamports, min_tokens_frontrun);
-                info!("   Backrun: {} tokens → {} min lamports SOL", expected_tokens, min_sol_backrun);
+                info!(
+                    "   Frontrun: {} lamports SOL → {} min tokens",
+                    position_lamports, min_tokens_frontrun
+                );
+                info!(
+                    "   Backrun: {} tokens → {} min lamports SOL",
+                    expected_tokens, min_sol_backrun
+                );
 
                 // CRITICAL: Use victim's blockhash for ALL bundle transactions
                 let blockhash_to_use = match &opportunity.victim_blockhash {
                     Some(bh) => {
-                        info!("✅ Using VICTIM's blockhash: {} (CRITICAL for bundle success)", bh);
+                        info!(
+                            "✅ Using VICTIM's blockhash: {} (CRITICAL for bundle success)",
+                            bh
+                        );
                         *bh
                     }
                     None => {
-                        warn!("⚠️  No victim blockhash - fetching fresh (may cause bundle failure)");
+                        warn!(
+                            "⚠️  No victim blockhash - fetching fresh (may cause bundle failure)"
+                        );
                         match rpc_client.get_latest_blockhash() {
                             Ok(blockhash) => blockhash,
                             Err(e) => {
@@ -3855,7 +4032,7 @@ async fn execute_sandwich_opportunity(
                 // ATA instructions are idempotent - they succeed even if ATA already exists
                 // This prevents fee waste: if bundle fails, ATA creation also fails
                 let frontrun_tx = solana_sdk::transaction::Transaction::new_signed_with_payer(
-                    &[token_ata_ix, wsol_ata_ix, frontrun_ix],  // ATA creation + swap in one tx
+                    &[token_ata_ix, wsol_ata_ix, frontrun_ix], // ATA creation + swap in one tx
                     Some(&trading_keypair.pubkey()),
                     &[trading_keypair],
                     blockhash_to_use,
@@ -3872,10 +4049,19 @@ async fn execute_sandwich_opportunity(
 
                 // Grok recommended: 0.005 SOL minimum tip for MEV bundles
                 let jito_tip_lamports = 5_000_000u64; // 0.005 SOL - competitive for MEV
-                info!("💰 PumpSwap MEV tip: {} lamports ({:.4} SOL)", jito_tip_lamports, jito_tip_lamports as f64 / 1_000_000_000.0);
-                info!("🚀 Submitting PumpSwap SANDWICH to JITO: [FRONTRUN → VICTIM → BACKRUN → TIP]");
+                info!(
+                    "💰 PumpSwap MEV tip: {} lamports ({:.4} SOL)",
+                    jito_tip_lamports,
+                    jito_tip_lamports as f64 / 1_000_000_000.0
+                );
+                info!(
+                    "🚀 Submitting PumpSwap SANDWICH to JITO: [FRONTRUN → VICTIM → BACKRUN → TIP]"
+                );
                 info!("   Bundle: [FRONTRUN → VICTIM → BACKRUN → TIP] (4 txs)");
-                info!("   Victim tx bytes: {} bytes", opportunity.victim_tx_bytes.as_ref().map_or(0, |b| b.len()));
+                info!(
+                    "   Victim tx bytes: {} bytes",
+                    opportunity.victim_tx_bytes.as_ref().map_or(0, |b| b.len())
+                );
                 let bundle_result = jito_client
                     .submit_sandwich_bundle(
                         frontrun_tx,
@@ -3927,7 +4113,7 @@ async fn execute_sandwich_opportunity(
     // For most DEXs, the pool address contains or relates to the token mint
     // We'll use a simplified approach: attempt to parse token accounts from the opportunity
 
-    let token_mint = if let Some(pool_str) = opportunity.pool_address.as_ref() {
+    let _token_mint = if let Some(pool_str) = opportunity.pool_address.as_ref() {
         // Try to parse as pubkey
         match Pubkey::from_str(pool_str) {
             Ok(pool_pubkey) => {
