@@ -39,7 +39,7 @@ pub fn derive_tick_array_pda(pool_id: &Pubkey, start_index: i32, program_id: &Pu
     let seeds = &[
         b"tick_array",
         pool_id.as_ref(),
-        &start_index.to_be_bytes(),  // Big-endian (verified 2025-12-07)
+        &start_index.to_be_bytes(), // Big-endian (verified 2025-12-07)
     ];
     let (pda, _bump) = Pubkey::find_program_address(seeds, program_id);
     pda
@@ -72,22 +72,28 @@ pub fn verify_tick_array_exists(
             if account.owner == program_id {
                 tracing::info!(
                     "✅ tick_array verified: {} (start_index={}, account_data_len={})",
-                    tick_array_pda, start_index, account.data.len()
+                    tick_array_pda,
+                    start_index,
+                    account.data.len()
                 );
                 Ok(tick_array_pda)
             } else {
                 Err(anyhow!(
                     "tick_array {} exists but owned by {} (expected {})",
-                    tick_array_pda, account.owner, program_id
+                    tick_array_pda,
+                    account.owner,
+                    program_id
                 ))
             }
         }
-        Err(e) => {
-            Err(anyhow!(
-                "tick_array {} not initialized (start_index={}, tick={}, tick_spacing={}): {}",
-                tick_array_pda, start_index, tick, tick_spacing, e
-            ))
-        }
+        Err(e) => Err(anyhow!(
+            "tick_array {} not initialized (start_index={}, tick={}, tick_spacing={}): {}",
+            tick_array_pda,
+            start_index,
+            tick,
+            tick_spacing,
+            e
+        )),
     }
 }
 
@@ -147,41 +153,56 @@ pub fn build_raydium_clmm_swap_instruction(
     let token_program = spl_token::id();
     let token_program_2022 = Pubkey::from_str("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb")
         .expect("Token-2022 program ID");
-    let memo_program = Pubkey::from_str("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr")
-        .expect("Memo program ID");
+    let memo_program =
+        Pubkey::from_str("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr").expect("Memo program ID");
 
     // Determine which vault/mint is input and which is output based on swap direction
     let (vault_input, vault_output, mint_input, mint_output) = if is_base_input {
-        (pool_state.token_vault_a, pool_state.token_vault_b, pool_state.token_mint_a, pool_state.token_mint_b)
+        (
+            pool_state.token_vault_a,
+            pool_state.token_vault_b,
+            pool_state.token_mint_a,
+            pool_state.token_mint_b,
+        )
     } else {
-        (pool_state.token_vault_b, pool_state.token_vault_a, pool_state.token_mint_b, pool_state.token_mint_a)
+        (
+            pool_state.token_vault_b,
+            pool_state.token_vault_a,
+            pool_state.token_mint_b,
+            pool_state.token_mint_a,
+        )
     };
 
     // Calculate tick_array PDA based on current tick and tick spacing
-    let tick_array_start_index = get_tick_array_start_index(pool_state.tick_current, pool_state.tick_spacing);
-    let tick_array = derive_tick_array_pda(&pool_state.pool_id, tick_array_start_index, &program_id);
+    let tick_array_start_index =
+        get_tick_array_start_index(pool_state.tick_current, pool_state.tick_spacing);
+    let tick_array =
+        derive_tick_array_pda(&pool_state.pool_id, tick_array_start_index, &program_id);
 
     // DEBUG: tick_array derivation - using info! to ensure it appears
     tracing::info!(
         "🎯 CLMM tick_array: tick_current={}, tick_spacing={}, start_index={}, tick_array={}",
-        pool_state.tick_current, pool_state.tick_spacing, tick_array_start_index, tick_array
+        pool_state.tick_current,
+        pool_state.tick_spacing,
+        tick_array_start_index,
+        tick_array
     );
 
     let accounts = vec![
-        AccountMeta::new(*user_owner, true),              // 0: payer (SIGNER)
+        AccountMeta::new(*user_owner, true), // 0: payer (SIGNER)
         AccountMeta::new_readonly(pool_state.amm_config, false), // 1: amm_config
-        AccountMeta::new(pool_state.pool_id, false),      // 2: pool_state
-        AccountMeta::new(*user_source_token, false),      // 3: input_token_account
-        AccountMeta::new(*user_dest_token, false),        // 4: output_token_account
-        AccountMeta::new(vault_input, false),             // 5: input_vault
-        AccountMeta::new(vault_output, false),            // 6: output_vault
+        AccountMeta::new(pool_state.pool_id, false), // 2: pool_state
+        AccountMeta::new(*user_source_token, false), // 3: input_token_account
+        AccountMeta::new(*user_dest_token, false), // 4: output_token_account
+        AccountMeta::new(vault_input, false), // 5: input_vault
+        AccountMeta::new(vault_output, false), // 6: output_vault
         AccountMeta::new(pool_state.observation_key, false), // 7: observation_state
-        AccountMeta::new_readonly(token_program, false),  // 8: token_program (SPL Token)
+        AccountMeta::new_readonly(token_program, false), // 8: token_program (SPL Token)
         AccountMeta::new_readonly(token_program_2022, false), // 9: token_program_2022
-        AccountMeta::new_readonly(memo_program, false),   // 10: memo_program
-        AccountMeta::new_readonly(mint_input, false),     // 11: input_vault_mint
-        AccountMeta::new_readonly(mint_output, false),    // 12: output_vault_mint
-        AccountMeta::new(tick_array, false),              // 13+: tick_array (remaining accounts)
+        AccountMeta::new_readonly(memo_program, false), // 10: memo_program
+        AccountMeta::new_readonly(mint_input, false), // 11: input_vault_mint
+        AccountMeta::new_readonly(mint_output, false), // 12: output_vault_mint
+        AccountMeta::new(tick_array, false), // 13+: tick_array (remaining accounts)
     ];
 
     Ok(Instruction {
