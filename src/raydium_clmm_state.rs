@@ -15,13 +15,13 @@ pub const RAYDIUM_CLMM_PROGRAM_ID: &str = "CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7gr
 #[derive(Debug, Clone)]
 pub struct RaydiumClmmPoolState {
     pub pool_id: Pubkey,
-    pub amm_config: Pubkey,      // Added: Required for swap instruction
+    pub amm_config: Pubkey, // Added: Required for swap instruction
     pub token_mint_a: Pubkey,
     pub token_mint_b: Pubkey,
     pub token_vault_a: Pubkey,
     pub token_vault_b: Pubkey,
     pub observation_key: Pubkey,
-    pub tick_spacing: u16,       // Added: Required for tick_array calculation
+    pub tick_spacing: u16, // Added: Required for tick_array calculation
     pub sqrt_price_x64: u128,
     pub tick_current: i32,
 }
@@ -57,7 +57,7 @@ impl RaydiumClmmPoolState {
         }
 
         // Parse pubkeys at their offsets (all +8 from original due to discriminator)
-        let amm_config = Self::parse_pubkey(data, 9)?;  // offset 9 (after discriminator + bump)
+        let amm_config = Self::parse_pubkey(data, 9)?; // offset 9 (after discriminator + bump)
         let token_mint_a = Self::parse_pubkey(data, 73)?;
         let token_mint_b = Self::parse_pubkey(data, 105)?;
         let token_vault_a = Self::parse_pubkey(data, 137)?;
@@ -88,7 +88,9 @@ impl RaydiumClmmPoolState {
         // DEBUG: pool parsing - using info! to ensure it appears
         tracing::info!(
             "📊 CLMM parsed: amm_config={}, tick_current={}, tick_spacing={}",
-            amm_config, tick_current, tick_spacing
+            amm_config,
+            tick_current,
+            tick_spacing
         );
 
         Ok(RaydiumClmmPoolState {
