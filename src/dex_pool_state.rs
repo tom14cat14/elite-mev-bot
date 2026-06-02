@@ -25,9 +25,9 @@ pub enum DexType {
     RaydiumCpmm,
     OrcaWhirlpools,
     MeteoraDlmm,
-    PumpFunBondingCurve,  // Original pump.fun bonding curve: 6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P
-    PumpSwapDex,           // PumpSwap AMM DEX: pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA
-    JupiterV6, // Special handling needed
+    PumpFunBondingCurve, // Original pump.fun bonding curve: 6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P
+    PumpSwapDex,         // PumpSwap AMM DEX: pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA
+    JupiterV6,           // Special handling needed
 }
 
 impl DexType {
@@ -103,8 +103,8 @@ pub enum DexPoolState {
     RaydiumCpmm(RaydiumCpmmPoolState),
     OrcaWhirlpools(OrcaWhirlpoolState),
     MeteoraDlmm(MeteoraDlmmPoolState),
-    PumpFunBondingCurve(PumpSwapBondingCurveState),  // Original pump.fun
-    PumpSwapDex(PumpSwapBondingCurveState),           // PumpSwap AMM DEX - uses similar state structure
+    PumpFunBondingCurve(PumpSwapBondingCurveState), // Original pump.fun
+    PumpSwapDex(PumpSwapBondingCurveState), // PumpSwap AMM DEX - uses similar state structure
 }
 
 impl DexPoolState {
