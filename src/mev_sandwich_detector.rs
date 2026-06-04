@@ -5,8 +5,8 @@
 
 use solana_entry::entry::Entry;
 use solana_sdk::{
-    hash::Hash,
-    message::VersionedMessage, pubkey::Pubkey, system_program, transaction::VersionedTransaction,
+    hash::Hash, message::VersionedMessage, pubkey::Pubkey, system_program,
+    transaction::VersionedTransaction,
 };
 use std::str::FromStr;
 use tracing::{debug, info, warn};
@@ -725,7 +725,8 @@ fn parse_pumpfun_bonding_curve_swap(
         None => {
             warn!(
                 "⚠️  PumpFun Parse REJECTED: pool_idx={} out of bounds (accounts.len={})",
-                pool_idx, accounts.len()
+                pool_idx,
+                accounts.len()
             );
             return None;
         }
@@ -738,7 +739,8 @@ fn parse_pumpfun_bonding_curve_swap(
         None => {
             warn!(
                 "⚠️  PumpFun Parse REJECTED: user_source_idx={} out of bounds (accounts.len={})",
-                user_source_idx, accounts.len()
+                user_source_idx,
+                accounts.len()
             );
             return None;
         }
@@ -750,7 +752,8 @@ fn parse_pumpfun_bonding_curve_swap(
         None => {
             warn!(
                 "⚠️  PumpFun Parse REJECTED: user_dest_idx={} out of bounds (accounts.len={})",
-                user_dest_idx, accounts.len()
+                user_dest_idx,
+                accounts.len()
             );
             return None;
         }
@@ -872,7 +875,8 @@ fn parse_pumpswap_dex_swap(
         None => {
             warn!(
                 "⚠️  PumpSwap DEX Parse REJECTED: pool_idx={} out of bounds (accounts.len={})",
-                pool_idx, accounts.len()
+                pool_idx,
+                accounts.len()
             );
             return None;
         }
@@ -1042,8 +1046,10 @@ fn analyze_transaction(
                     if victim_tx_bytes.is_none() {
                         warn!("⚠️  Failed to serialize victim tx for {}", dex_name);
                     } else {
-                        info!("✅ Captured victim tx bytes ({} bytes) for JITO bundle",
-                              victim_tx_bytes.as_ref().map_or(0, |b| b.len()));
+                        info!(
+                            "✅ Captured victim tx bytes ({} bytes) for JITO bundle",
+                            victim_tx_bytes.as_ref().map_or(0, |b| b.len())
+                        );
                     }
 
                     // CRITICAL: Extract victim's blockhash - ALL bundle TXs must use this SAME blockhash
@@ -1053,7 +1059,10 @@ fn analyze_transaction(
                         VersionedMessage::V0(msg) => Some(msg.recent_blockhash),
                     };
                     if let Some(ref bh) = victim_blockhash {
-                        info!("✅ Captured victim blockhash: {} (CRITICAL for bundle success)", bh);
+                        info!(
+                            "✅ Captured victim blockhash: {} (CRITICAL for bundle success)",
+                            bh
+                        );
                     }
 
                     return Some(SandwichOpportunity {
