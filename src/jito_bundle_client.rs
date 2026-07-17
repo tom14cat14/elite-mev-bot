@@ -4,9 +4,11 @@ use serde::{Deserialize, Serialize};
 use solana_rpc_client::rpc_client::RpcClient;
 use solana_sdk::{
     commitment_config::CommitmentConfig,
-    compute_budget::ComputeBudgetInstruction, pubkey::Pubkey,
+    compute_budget::ComputeBudgetInstruction,
+    pubkey::Pubkey,
     signature::{Signature, Signer},
-    system_instruction, transaction::Transaction,
+    system_instruction,
+    transaction::Transaction,
 };
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -393,7 +395,10 @@ impl JitoBundleClient {
         // This is the #1 cause of bundle failures - blockhash mismatch
         let blockhash_to_use = match victim_blockhash {
             Some(bh) => {
-                info!("✅ Using VICTIM's blockhash for tip tx: {} (CRITICAL for bundle success)", bh);
+                info!(
+                    "✅ Using VICTIM's blockhash for tip tx: {} (CRITICAL for bundle success)",
+                    bh
+                );
                 bh
             }
             None => {
@@ -460,7 +465,10 @@ impl JitoBundleClient {
         }
 
         let submission_time = start_time.elapsed().as_millis();
-        info!("✅ Sandwich bundle submitted in {}ms: {}", submission_time, bundle_id);
+        info!(
+            "✅ Sandwich bundle submitted in {}ms: {}",
+            submission_time, bundle_id
+        );
 
         Ok(bundle_id)
     }
@@ -481,7 +489,10 @@ impl JitoBundleClient {
                     let remaining = RATE_LIMIT_COOLDOWN_MS - elapsed;
                     debug!("⚡ RATE LIMITED: Skipping bundle - {}ms since last submission, need {}ms cooldown",
                            elapsed, remaining);
-                    return Err(anyhow::anyhow!("Rate limited: {}ms since last submission", elapsed));
+                    return Err(anyhow::anyhow!(
+                        "Rate limited: {}ms since last submission",
+                        elapsed
+                    ));
                 }
             }
         }
@@ -489,7 +500,10 @@ impl JitoBundleClient {
         // ⚡ 0SLOT: NY-ONLY endpoint - maximum speed, no EU fallback latency
         // EU endpoints add 100-200ms which kills 0slot opportunity
         let endpoints: [(String, Duration); 1] = [
-            ("https://ny.mainnet.block-engine.jito.wtf".to_string(), Duration::from_millis(150)),  // NY only, 150ms timeout
+            (
+                "https://ny.mainnet.block-engine.jito.wtf".to_string(),
+                Duration::from_millis(150),
+            ), // NY only, 150ms timeout
         ];
 
         // Update timestamp AFTER rate limit check passes
@@ -525,18 +539,31 @@ impl JitoBundleClient {
             let response = match response {
                 Ok(Ok(r)) => r,
                 Ok(Err(e)) => {
-                    debug!("⚡ {} HTTP error in {}ms: {}", Self::short_endpoint(endpoint), start.elapsed().as_millis(), e);
+                    debug!(
+                        "⚡ {} HTTP error in {}ms: {}",
+                        Self::short_endpoint(endpoint),
+                        start.elapsed().as_millis(),
+                        e
+                    );
                     continue; // Try next endpoint
                 }
                 Err(_) => {
-                    debug!("⚡ {} Timeout after {:?}", Self::short_endpoint(endpoint), timeout_duration);
+                    debug!(
+                        "⚡ {} Timeout after {:?}",
+                        Self::short_endpoint(endpoint),
+                        timeout_duration
+                    );
                     continue; // Try next endpoint
                 }
             };
 
             if response.status().as_u16() == 429 {
-                warn!("⚡ {} Rate limited (429) in {}ms - backoff {:?}",
-                      Self::short_endpoint(endpoint), start.elapsed().as_millis(), backoff);
+                warn!(
+                    "⚡ {} Rate limited (429) in {}ms - backoff {:?}",
+                    Self::short_endpoint(endpoint),
+                    start.elapsed().as_millis(),
+                    backoff
+                );
 
                 // Exponential backoff before trying next endpoint
                 if backoff < max_backoff {
@@ -551,12 +578,21 @@ impl JitoBundleClient {
                 // ⚡ DIAGNOSTIC: Log the error body for 400 errors to understand rejections
                 if status.as_u16() == 400 {
                     if let Ok(body) = response.text().await {
-                        warn!("⚡ {} HTTP 400 - BODY: {}", Self::short_endpoint(endpoint), body);
+                        warn!(
+                            "⚡ {} HTTP 400 - BODY: {}",
+                            Self::short_endpoint(endpoint),
+                            body
+                        );
                     } else {
                         warn!("⚡ {} HTTP 400 (no body)", Self::short_endpoint(endpoint));
                     }
                 } else {
-                    warn!("⚡ {} HTTP {} in {}ms", Self::short_endpoint(endpoint), status, start.elapsed().as_millis());
+                    warn!(
+                        "⚡ {} HTTP {} in {}ms",
+                        Self::short_endpoint(endpoint),
+                        status,
+                        start.elapsed().as_millis()
+                    );
                 }
                 continue; // Try next endpoint
             }
@@ -565,14 +601,22 @@ impl JitoBundleClient {
             match response.json::<BundleSubmissionResponse>().await {
                 Ok(bundle_response) => {
                     if let Some(error) = bundle_response.error {
-                        warn!("⚡ {} JITO error {}: {}", Self::short_endpoint(endpoint), error.code, error.message);
+                        warn!(
+                            "⚡ {} JITO error {}: {}",
+                            Self::short_endpoint(endpoint),
+                            error.code,
+                            error.message
+                        );
                         continue;
                     }
 
                     if let Some(bundle_id) = bundle_response.result {
-                        info!("⚡ {} SUCCESS in {}ms: {}",
-                              Self::short_endpoint(endpoint), start.elapsed().as_millis(),
-                              &bundle_id[..bundle_id.len().min(16)]);
+                        info!(
+                            "⚡ {} SUCCESS in {}ms: {}",
+                            Self::short_endpoint(endpoint),
+                            start.elapsed().as_millis(),
+                            &bundle_id[..bundle_id.len().min(16)]
+                        );
                         return Ok(bundle_id);
                     }
                 }
@@ -590,21 +634,32 @@ impl JitoBundleClient {
 
     /// Helper: Get short endpoint name for logging
     fn short_endpoint(endpoint: &str) -> &str {
-        if endpoint.contains("ny.") { "NY" }
-        else if endpoint.contains("amsterdam") { "AMS" }
-        else if endpoint.contains("frankfurt") { "FRA" }
-        else if endpoint.contains("tokyo") { "TKY" }
-        else { "PRI" }
+        if endpoint.contains("ny.") {
+            "NY"
+        } else if endpoint.contains("amsterdam") {
+            "AMS"
+        } else if endpoint.contains("frankfurt") {
+            "FRA"
+        } else if endpoint.contains("tokyo") {
+            "TKY"
+        } else {
+            "PRI"
+        }
     }
 
     /// Single bundle submission attempt (deprecated - use submit_bundle_to_endpoint)
     async fn submit_bundle_once(&self, bundle: &JitoBundle) -> Result<String> {
-        self.submit_bundle_to_endpoint(bundle, &self.block_engine_url).await
+        self.submit_bundle_to_endpoint(bundle, &self.block_engine_url)
+            .await
     }
 
     /// ⚡ GROK OPTIMIZATION: Fast bundle submission to specific endpoint
     /// Timeout reduced from 30s to 200ms for MEV speed requirements
-    async fn submit_bundle_to_endpoint(&self, bundle: &JitoBundle, endpoint: &str) -> Result<String> {
+    async fn submit_bundle_to_endpoint(
+        &self,
+        bundle: &JitoBundle,
+        endpoint: &str,
+    ) -> Result<String> {
         let start = Instant::now();
 
         let request = BundleSubmissionRequest {
@@ -628,7 +683,11 @@ impl JitoBundleClient {
         let response = match response {
             Ok(Ok(r)) => r,
             Ok(Err(e)) => {
-                warn!("⚡ SPEED: HTTP error in {}ms: {}", start.elapsed().as_millis(), e);
+                warn!(
+                    "⚡ SPEED: HTTP error in {}ms: {}",
+                    start.elapsed().as_millis(),
+                    e
+                );
                 return Err(anyhow::anyhow!("HTTP error: {}", e));
             }
             Err(_) => {
@@ -641,14 +700,25 @@ impl JitoBundleClient {
             let status = response.status();
             // ⚡ Don't waste time on detailed error parsing for 429s
             if status.as_u16() == 429 {
-                warn!("⚡ SPEED: Rate limited (429) on {} - trying next opportunity", endpoint);
+                warn!(
+                    "⚡ SPEED: Rate limited (429) on {} - trying next opportunity",
+                    endpoint
+                );
             } else if status.as_u16() == 400 {
                 // ⚡ DIAGNOSTIC: Log the error body for 400 errors to understand rejections
                 if let Ok(body) = response.text().await {
-                    warn!("⚡ HTTP 400 on {}: {}", Self::short_endpoint(endpoint), body);
+                    warn!(
+                        "⚡ HTTP 400 on {}: {}",
+                        Self::short_endpoint(endpoint),
+                        body
+                    );
                 }
             }
-            return Err(anyhow::anyhow!("HTTP {} in {}ms", status, start.elapsed().as_millis()));
+            return Err(anyhow::anyhow!(
+                "HTTP {} in {}ms",
+                status,
+                start.elapsed().as_millis()
+            ));
         }
 
         let bundle_response: BundleSubmissionResponse = response.json().await?;
@@ -666,7 +736,11 @@ impl JitoBundleClient {
             .result
             .ok_or_else(|| anyhow::anyhow!("No bundle ID returned"))?;
 
-        info!("⚡ SPEED: Bundle submitted in {}ms: {}", start.elapsed().as_millis(), &bundle_id[..16]);
+        info!(
+            "⚡ SPEED: Bundle submitted in {}ms: {}",
+            start.elapsed().as_millis(),
+            &bundle_id[..16]
+        );
 
         Ok(bundle_id)
     }
@@ -1150,17 +1224,26 @@ impl JitoBundleClient {
                             // If confirmation_status exists, tx is already being processed
                             // ProcessedWithMeta or higher = already processed
                             if status.confirmations.is_some() {
-                                info!("⚡ Victim tx CONFIRMED ({}ms) - using bracket strategy", elapsed);
+                                info!(
+                                    "⚡ Victim tx CONFIRMED ({}ms) - using bracket strategy",
+                                    elapsed
+                                );
                                 false // Already processed, use bracket
                             } else {
                                 // Slot exists but no confirmations = still being processed
-                                info!("⚡ Victim tx IN-FLIGHT ({}ms) - using bracket strategy", elapsed);
+                                info!(
+                                    "⚡ Victim tx IN-FLIGHT ({}ms) - using bracket strategy",
+                                    elapsed
+                                );
                                 false // In-flight means it's being scheduled now
                             }
                         }
                         None => {
                             // Not found = still truly pending!
-                            info!("⚡ Victim tx PENDING ({}ms) - including in FULL SANDWICH!", elapsed);
+                            info!(
+                                "⚡ Victim tx PENDING ({}ms) - including in FULL SANDWICH!",
+                                elapsed
+                            );
                             true // PENDING - can include in bundle!
                         }
                     }
@@ -1188,7 +1271,10 @@ impl JitoBundleClient {
     pub fn extract_victim_signature(victim_tx_bytes: &[u8]) -> Option<Signature> {
         // Minimum size: 1 (sig count) + 64 (signature) = 65 bytes
         if victim_tx_bytes.len() < 65 {
-            warn!("⚡ Victim tx too small to extract signature ({} bytes)", victim_tx_bytes.len());
+            warn!(
+                "⚡ Victim tx too small to extract signature ({} bytes)",
+                victim_tx_bytes.len()
+            );
             return None;
         }
 
