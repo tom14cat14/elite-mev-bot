@@ -7,6 +7,7 @@
 
 use anyhow::{anyhow, Result};
 use dashmap::DashMap;
+use once_cell::sync::Lazy;
 use solana_client::rpc_client::RpcClient;
 use solana_sdk::{
     commitment_config::CommitmentConfig,
@@ -18,7 +19,6 @@ use solana_sdk::{
     transaction::Transaction,
 };
 use std::str::FromStr;
-use once_cell::sync::Lazy;
 use tracing::{debug, info, warn};
 
 // ⚡ GROK OPTIMIZATION: Lock-free ATA cache using DashMap
@@ -70,7 +70,10 @@ impl TokenAccountManager {
                     info!("🔷 Mint {} is Token-2022 (owner: {})", mint, account.owner);
                     token_2022_id
                 } else if account.owner == spl_token::id() {
-                    info!("🔶 Mint {} is standard SPL Token (owner: {})", mint, account.owner);
+                    info!(
+                        "🔶 Mint {} is standard SPL Token (owner: {})",
+                        mint, account.owner
+                    );
                     spl_token::id()
                 } else {
                     // Unknown owner - log it and default to SPL Token
@@ -113,13 +116,19 @@ impl TokenAccountManager {
         // ⚡ GROK OPTIMIZATION: Lock-free cache lookup using DashMap
         // Returns cached ATA address instantly without any RPC calls
         if let Some(cached_ata) = VERIFIED_ATAS.get(&cache_key) {
-            debug!("⚡ SPEED: ATA from cache (0ms): {} (mint: {})", *cached_ata, mint);
+            debug!(
+                "⚡ SPEED: ATA from cache (0ms): {} (mint: {})",
+                *cached_ata, mint
+            );
             return Ok(*cached_ata);
         }
 
         // Check if SPL Token ATA already exists
         if let Ok(_account) = self.rpc_client.get_account(&ata_spl) {
-            info!("✅ ATA already exists (SPL Token): {} (mint: {})", ata_spl, mint);
+            info!(
+                "✅ ATA already exists (SPL Token): {} (mint: {})",
+                ata_spl, mint
+            );
             // ⚡ GROK OPTIMIZATION: Lock-free cache insert
             VERIFIED_ATAS.insert(cache_key.clone(), ata_spl);
             return Ok(ata_spl);
@@ -127,7 +136,10 @@ impl TokenAccountManager {
 
         // Check if Token-2022 ATA already exists
         if let Ok(_account) = self.rpc_client.get_account(&ata_2022) {
-            info!("✅ ATA already exists (Token-2022): {} (mint: {})", ata_2022, mint);
+            info!(
+                "✅ ATA already exists (Token-2022): {} (mint: {})",
+                ata_2022, mint
+            );
             // ⚡ GROK OPTIMIZATION: Lock-free cache insert
             VERIFIED_ATAS.insert(cache_key.clone(), ata_2022);
             return Ok(ata_2022);
@@ -135,7 +147,8 @@ impl TokenAccountManager {
 
         // Neither ATA exists - detect correct token program and create
         let token_program_id = self.get_token_program_for_mint(mint);
-        let ata_address = Self::get_ata_address_with_program(&wallet_pubkey, mint, &token_program_id);
+        let ata_address =
+            Self::get_ata_address_with_program(&wallet_pubkey, mint, &token_program_id);
 
         info!(
             "📝 Creating ATA for wallet {} and mint {} (program: {})",
@@ -143,7 +156,11 @@ impl TokenAccountManager {
         );
 
         // Create ATA instruction with correct token program
-        let create_ata_ix = Self::build_create_ata_instruction_with_program(&wallet_pubkey, mint, &token_program_id);
+        let create_ata_ix = Self::build_create_ata_instruction_with_program(
+            &wallet_pubkey,
+            mint,
+            &token_program_id,
+        );
 
         // Build and send transaction
         let recent_blockhash = self
@@ -171,11 +188,17 @@ impl TokenAccountManager {
 
                 // Error 0x2 = AccountAlreadyInitialized - this is OK, ATA exists
                 // Error 0x0 = Success (shouldn't happen in error branch but handle anyway)
-                if err_str.contains("0x2") || err_str.contains("already in use") ||
-                   err_str.contains("AlreadyInitialized") || err_str.contains("AccountAlreadyInitialized") {
+                if err_str.contains("0x2")
+                    || err_str.contains("already in use")
+                    || err_str.contains("AlreadyInitialized")
+                    || err_str.contains("AccountAlreadyInitialized")
+                {
                     // ATA already exists - add to cache and return the computed address directly
                     // (RPC lookup may fail but we KNOW from error 0x2 that account exists)
-                    info!("✅ ATA already exists (detected via error 0x2): {} (adding to cache)", ata_address);
+                    info!(
+                        "✅ ATA already exists (detected via error 0x2): {} (adding to cache)",
+                        ata_address
+                    );
                     // ⚡ GROK OPTIMIZATION: Lock-free cache insert
                     VERIFIED_ATAS.insert(cache_key, ata_address);
                     return Ok(ata_address);
@@ -251,7 +274,7 @@ impl TokenAccountManager {
     pub fn build_create_ata_instruction_with_program(
         wallet_pubkey: &Pubkey,
         mint: &Pubkey,
-        token_program_id: &Pubkey
+        token_program_id: &Pubkey,
     ) -> Instruction {
         let ata_program_id =
             Pubkey::try_from(ASSOCIATED_TOKEN_PROGRAM_ID).expect("Invalid ATA program ID");
@@ -285,7 +308,11 @@ impl TokenAccountManager {
     ///
     /// Uses PDA derivation: find_program_address([wallet, token_program, mint], ata_program)
     /// Supports both standard Token Program and Token-2022.
-    pub fn get_ata_address_with_program(wallet_pubkey: &Pubkey, mint: &Pubkey, token_program_id: &Pubkey) -> Pubkey {
+    pub fn get_ata_address_with_program(
+        wallet_pubkey: &Pubkey,
+        mint: &Pubkey,
+        token_program_id: &Pubkey,
+    ) -> Pubkey {
         let ata_program_id =
             Pubkey::try_from(ASSOCIATED_TOKEN_PROGRAM_ID).expect("Invalid ATA program ID");
 
