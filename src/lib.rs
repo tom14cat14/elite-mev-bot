@@ -124,6 +124,7 @@ pub use jupiter_executor::{
     create_quote_request, ExecutionParams, ExecutionResult, JupiterExecutor,
 };
 pub use jupiter_rate_limiter::{JupiterRateLimiter, RateLimiterStats};
+pub use leader_schedule_manager::{should_trade_current_slot, LeaderScheduleManager};
 pub use liquidation_engine::{
     LiquidatablePosition, LiquidationEngine, LiquidationExecution, LiquidationOpportunity,
     LiquidationStats, ProtocolRegistry,
@@ -175,7 +176,6 @@ pub use transaction_processor::{
 };
 pub use volume_tracker::{SwapRecord, VolumeTracker};
 pub use wallet_manager::{TokenBalance, WalletBalanceInfo, WalletManager};
-pub use leader_schedule_manager::{LeaderScheduleManager, should_trade_current_slot};
 
 // Re-export ShredStream types
 pub use chrono::{DateTime, Utc};
