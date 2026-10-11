@@ -85,7 +85,6 @@ static US_EAST_VALIDATORS: Lazy<Vec<Pubkey>> = Lazy::new(|| {
         Pubkey::from_str("5EhGYUyQNrxgUbuYF4vbL2SZDT6RMfhq3yjeyevvULeC").unwrap(),
         Pubkey::from_str("GoeW4aFK4dGoekJySgUynWDxBZiQJqm8GDAF4H53tDK9").unwrap(),
         Pubkey::from_str("Hz5aLvpKScNWoe9YZWxBLrQA3qzHJivBGtfciMekk8m5").unwrap(),
-
         // ===== ORIGINAL CURATED US-EAST VALIDATORS =====
         // Jito validators (multiple stake pools, US-based infrastructure)
         Pubkey::from_str("J1to1yufRnoWn81KYg1XkTWzmKjnYSnmE2VY8DGUJ9Qv").unwrap(),
@@ -105,7 +104,6 @@ static US_EAST_VALIDATORS: Lazy<Vec<Pubkey>> = Lazy::new(|| {
         Pubkey::from_str("CakcnaRDHka2gXyfbEd2d3xsvkJkqsLw2akB3zsN1D2S").unwrap(),
         // Blockdaemon US
         Pubkey::from_str("AkK5UBFwkx3F2P33Lzmtm3RdWNjnoAyipwPTNhfAUSkX").unwrap(),
-
         // ===== VALIDATORS.APP API - VERIFIED US-EAST DATACENTERS (2025-12-09) =====
         // Binance Staking (Ashburn, 10.7M SOL)
         Pubkey::from_str("3N7s9zXMZ4QqvHQR15t5GNHyqc89KduzMP7423eWiD5g").unwrap(),
@@ -253,17 +251,26 @@ impl LeaderScheduleManager {
                 let is_local = latency < LOCAL_LEADER_LATENCY_THRESHOLD_MS;
 
                 if is_local {
-                    debug!("⚡ 0SLOT: LOCAL leader {} ({}ms) - TRADE!",
-                           &leader_pubkey.to_string()[..8], latency);
+                    debug!(
+                        "⚡ 0SLOT: LOCAL leader {} ({}ms) - TRADE!",
+                        &leader_pubkey.to_string()[..8],
+                        latency
+                    );
                 } else {
-                    debug!("⚡ 0SLOT: REMOTE leader {} ({}ms) - SKIP",
-                           &leader_pubkey.to_string()[..8], latency);
+                    debug!(
+                        "⚡ 0SLOT: REMOTE leader {} ({}ms) - SKIP",
+                        &leader_pubkey.to_string()[..8],
+                        latency
+                    );
                 }
 
                 (is_local, Some(leader_pubkey), latency)
             }
             None => {
-                debug!("⚡ 0SLOT: No leader info for slot {} - assuming remote", current_slot);
+                debug!(
+                    "⚡ 0SLOT: No leader info for slot {} - assuming remote",
+                    current_slot
+                );
                 (false, None, 999)
             }
         }
@@ -280,7 +287,8 @@ impl LeaderScheduleManager {
         let start = Instant::now();
 
         // Get leader schedule for current epoch
-        let slot_leaders = self.rpc_client
+        let slot_leaders = self
+            .rpc_client
             .get_slot_leaders(
                 Self::get_current_slot(),
                 100, // Get next 100 slots (~40 seconds)
@@ -300,8 +308,11 @@ impl LeaderScheduleManager {
 
         LAST_SCHEDULE_FETCH_SLOT.store(current_slot, Ordering::SeqCst);
 
-        info!("⚡ 0SLOT: Leader schedule refreshed ({} slots) in {}ms",
-              slot_leaders.len(), start.elapsed().as_millis());
+        info!(
+            "⚡ 0SLOT: Leader schedule refreshed ({} slots) in {}ms",
+            slot_leaders.len(),
+            start.elapsed().as_millis()
+        );
 
         Ok(())
     }
@@ -385,7 +396,10 @@ pub async fn should_trade_current_slot(rpc_url: &str) -> bool {
             debug!("⚡ 0SLOT: Updated current slot to {}", slot);
         }
         Err(e) => {
-            warn!("⚡ 0SLOT: Failed to get current slot from RPC: {} - skipping", e);
+            warn!(
+                "⚡ 0SLOT: Failed to get current slot from RPC: {} - skipping",
+                e
+            );
             return false;
         }
     }
@@ -393,12 +407,18 @@ pub async fn should_trade_current_slot(rpc_url: &str) -> bool {
     let (is_local, leader, latency) = manager.is_current_leader_local().await;
 
     if is_local {
-        info!("⚡ 0SLOT: TRADING - local leader {:?} ({}ms)",
-              leader.map(|l| l.to_string()[..8].to_string()), latency);
+        info!(
+            "⚡ 0SLOT: TRADING - local leader {:?} ({}ms)",
+            leader.map(|l| l.to_string()[..8].to_string()),
+            latency
+        );
         true
     } else {
-        debug!("⚡ 0SLOT: SKIPPING - remote leader {:?} ({}ms)",
-               leader.map(|l| l.to_string()[..8].to_string()), latency);
+        debug!(
+            "⚡ 0SLOT: SKIPPING - remote leader {:?} ({}ms)",
+            leader.map(|l| l.to_string()[..8].to_string()),
+            latency
+        );
         false
     }
 }
